@@ -41,7 +41,7 @@ export function extractToolsFromApi(api: OpenAPIV3.Document): McpToolDefinition[
             usedNames.add(finalToolName);
             
             // Get or create a description
-            const description = operation.description || operation.summary || 
+            const description = ((operation.summary && operation.description) ? `${operation.summary} ${operation.description}` : undefined) || operation.summary || operation.description ||
                                 `Executes ${method.toUpperCase()} ${path}`;
             
             // Generate input schema and extract parameters
