@@ -109,9 +109,9 @@ declare global {
 async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<string | null | undefined> {
     try {
         // Check if we have the necessary credentials
-        const clientId = process.env[\`${getEnvVarName(schemeName, 'OAUTH_CLIENT_ID')}\`];
-        const clientSecret = process.env[\`${getEnvVarName(schemeName, 'OAUTH_CLIENT_SECRET')}\`];
-        const scopes = process.env[\`${getEnvVarName(schemeName, 'OAUTH_SCOPES')}\`];
+        const clientId = process.env[\`\${getEnvVarName(schemeName, 'OAUTH_CLIENT_ID')}\`];
+        const clientSecret = process.env[\`\${getEnvVarName(schemeName, 'OAUTH_CLIENT_SECRET')}\`];
+        const scopes = process.env[\`\${getEnvVarName(schemeName, 'OAUTH_SCOPES')}\`];
         
         if (!clientId || !clientSecret) {
             console.error(\`Missing client credentials for OAuth2 scheme '\${schemeName}'\`);
