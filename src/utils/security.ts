@@ -193,6 +193,30 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         return null;
     }
 }
+
+/**
+ * Get environment variable name for a security scheme
+ *
+ * @param schemeName Security scheme name
+ * @param type Type of security credentials
+ * @returns Environment variable name
+ */
+export function getEnvVarName(
+  schemeName: string,
+  type:
+    | 'API_KEY'
+    | 'BEARER_TOKEN'
+    | 'BASIC_USERNAME'
+    | 'BASIC_PASSWORD'
+    | 'OAUTH_CLIENT_ID'
+    | 'OAUTH_CLIENT_SECRET'
+    | 'OAUTH_TOKEN'
+    | 'OAUTH_SCOPES'
+    | 'OPENID_TOKEN'
+): string {
+  const sanitizedName = schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+  return \`\${type}_\${sanitizedName}\`;
+}
 `;
 }
 
