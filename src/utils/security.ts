@@ -109,9 +109,9 @@ declare global {
 async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<string | null | undefined> {
     try {
         // Check if we have the necessary credentials
-        const clientId = process.env[\`${getEnvVarName('schemeName', 'OAUTH_CLIENT_ID')}\`];
-        const clientSecret = process.env[\`${getEnvVarName('schemeName', 'OAUTH_CLIENT_SECRET')}\`];
-        const scopes = process.env[\`${getEnvVarName('schemeName', 'OAUTH_SCOPES')}\`];
+        const clientId = process.env[\`\${getEnvVarName(schemeName, 'OAUTH_CLIENT_ID')}\`];
+        const clientSecret = process.env[\`\${getEnvVarName(schemeName, 'OAUTH_CLIENT_SECRET')}\`];
+        const scopes = process.env[\`\${getEnvVarName(schemeName, 'OAUTH_SCOPES')}\`];
         
         if (!clientId || !clientSecret) {
             console.error(\`Missing client credentials for OAuth2 scheme '\${schemeName}'\`);
@@ -149,6 +149,8 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         // Prepare the token request
         let formData = new URLSearchParams();
         formData.append('grant_type', 'client_credentials');
+        formData.append('client_id', clientId);
+        formData.append('client_secret', clientSecret);
         
         // Add scopes if specified
         if (scopes) {
@@ -190,6 +192,30 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         console.error(\`Error acquiring OAuth2 token for '\${schemeName}':\`, errorMessage);
         return null;
     }
+}
+
+/**
+ * Get environment variable name for a security scheme
+ *
+ * @param schemeName Security scheme name
+ * @param type Type of security credentials
+ * @returns Environment variable name
+ */
+export function getEnvVarName(
+  schemeName: string,
+  type:
+    | 'API_KEY'
+    | 'BEARER_TOKEN'
+    | 'BASIC_USERNAME'
+    | 'BASIC_PASSWORD'
+    | 'OAUTH_CLIENT_ID'
+    | 'OAUTH_CLIENT_SECRET'
+    | 'OAUTH_TOKEN'
+    | 'OAUTH_SCOPES'
+    | 'OPENID_TOKEN'
+): string {
+  const sanitizedName = schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+  return \`\${type}_\${sanitizedName}\`;
 }
 `;
 }
