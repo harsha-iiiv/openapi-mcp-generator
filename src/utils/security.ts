@@ -149,6 +149,8 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         // Prepare the token request
         let formData = new URLSearchParams();
         formData.append('grant_type', 'client_credentials');
+        formData.append('client_id', clientId);
+        formData.append('client_secret', clientSecret);
         
         // Add scopes if specified
         if (scopes) {
