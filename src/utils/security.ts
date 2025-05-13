@@ -427,7 +427,7 @@ async function executeApiTool(
     // Prepare URL, query parameters, headers, and request body
     let urlPath = definition.pathTemplate;
     const queryParams: Record<string, any> = {};
-    const headers: Record<string, string> = { 'Accept': 'application/json' };
+    const headers: Record<string, string> = { 'Accept': 'application/json', 'User-Agent': 'orum-mcp-server' };
     let requestBodyData: any = undefined;
 
     // Apply parameters to the URL path, query, or headers
