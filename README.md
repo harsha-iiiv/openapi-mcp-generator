@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/harsha-iiiv-openapi-mcp-generator-badge.png)](https://mseep.ai/app/harsha-iiiv-openapi-mcp-generator)
+
 # OpenAPI to MCP Generator (openapi-mcp-generator)
 
 [![npm version](https://img.shields.io/npm/v/openapi-mcp-generator.svg)](https://www.npmjs.com/package/openapi-mcp-generator)
