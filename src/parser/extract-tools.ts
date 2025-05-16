@@ -1,18 +1,45 @@
-/**
- * Functions for extracting tools from an OpenAPI specification
- */
 import { OpenAPIV3 } from 'openapi-types';
 import type { JSONSchema7, JSONSchema7TypeName } from 'json-schema';
 import { generateOperationId } from '../utils/code-gen.js';
 import { McpToolDefinition } from '../types/index.js';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as yaml from 'js-yaml';
 
 /**
- * Extracts tool definitions from an OpenAPI document
+ * Reads and parses an OpenAPI specification file into an OpenAPI document.
  *
- * @param api OpenAPI document
+ * @param filePath Path to the OpenAPI specification file (JSON or YAML)
+ * @returns Parsed OpenAPI document
+ */
+function readOpenApiFile(filePath: string): OpenAPIV3.Document {
+  const ext = path.extname(filePath).toLowerCase();
+  const content = fs.readFileSync(filePath, 'utf8');
+
+  if (ext === '.json') {
+    return JSON.parse(content) as OpenAPIV3.Document;
+  } else if (ext === '.yaml' || ext === '.yml') {
+    return yaml.load(content) as OpenAPIV3.Document;
+  } else {
+    throw new Error('Unsupported file extension. Only .json, .yaml, and .yml are supported.');
+  }
+}
+
+/**
+ * Extracts tool definitions from an OpenAPI document or file
+ *
+ * @param apiOrPath OpenAPI document or path to OpenAPI specification file
  * @returns Array of MCP tool definitions
  */
-export function extractToolsFromApi(api: OpenAPIV3.Document): McpToolDefinition[] {
+export function extractToolsFromApi(apiOrPath: OpenAPIV3.Document | string): McpToolDefinition[] {
+  let api: OpenAPIV3.Document;
+
+  if (typeof apiOrPath === 'string') {
+    api = readOpenApiFile(apiOrPath);
+  } else {
+    api = apiOrPath;
+  }
+
   const tools: McpToolDefinition[] = [];
   const usedNames = new Set<string>();
   const globalSecurity = api.security || [];
