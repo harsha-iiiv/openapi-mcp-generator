@@ -35,7 +35,8 @@ export function generateMcpServerCode(
 
   // Generate code for API tool execution
   const executeApiToolFunctionCode = generateExecuteApiToolFunction(
-    api.components?.securitySchemes
+    api.components?.securitySchemes,
+    options,
   );
 
   // Generate code for request handlers

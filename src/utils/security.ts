@@ -2,6 +2,7 @@
  * Security handling utilities for OpenAPI to MCP generator
  */
 import { OpenAPIV3 } from 'openapi-types';
+import { CliOptions } from '../types/index.js';
 
 /**
  * Get environment variable name for a security scheme
@@ -80,9 +81,10 @@ export function generateHttpSecurityCode(): string {
 /**
  * Generates code for OAuth2 token acquisition
  *
+ * @param cliOptions CLI options
  * @returns Generated code for OAuth2 token acquisition
  */
-export function generateOAuth2TokenAcquisitionCode(): string {
+export function generateOAuth2TokenAcquisitionCode(cliOptions?: CliOptions): string {
   return `
 /**
  * Type definition for cached OAuth tokens
@@ -149,8 +151,11 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         // Prepare the token request
         let formData = new URLSearchParams();
         formData.append('grant_type', 'client_credentials');
-        formData.append('client_id', clientId);
-        formData.append('client_secret', clientSecret);
+
+        ${cliOptions?.authCredentialsDelivery === 'body' ? `
+            formData.append('client_id', clientId);
+            formData.append('client_secret', clientSecret);
+        ` : ''}
         
         // Add scopes if specified
         if (scopes) {
@@ -224,13 +229,15 @@ export function getEnvVarName(
  * Generates code for executing API tools with security handling
  *
  * @param securitySchemes Security schemes from OpenAPI spec
+ * @param cliOptions CLI options
  * @returns Generated code for the execute API tool function
  */
 export function generateExecuteApiToolFunction(
-  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes']
+  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes'],
+  cliOptions?: CliOptions,
 ): string {
   // Generate OAuth2 token acquisition function
-  const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode();
+  const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode(cliOptions);
 
   // Generate security handling code for checking, applying security
   const securityCode = `
@@ -427,8 +434,10 @@ async function executeApiTool(
     // Prepare URL, query parameters, headers, and request body
     let urlPath = definition.pathTemplate;
     const queryParams: Record<string, any> = {};
-    const headers: Record<string, string> = { 'Accept': 'application/json', 'User-Agent': 'orum-mcp-server' };
+    const headers: Record<string, string> = { 'Accept': 'application/json' };
     let requestBodyData: any = undefined;
+
+${cliOptions?.userAgent ? `headers['User-Agent'] = options.userAgent;` : ''}
 
     // Apply parameters to the URL path, query, or headers
     definition.executionParameters.forEach((param) => {

@@ -29,6 +29,10 @@ export interface CliOptions {
   transport?: TransportType;
   /** Server port (for web and streamable-http transports) */
   port?: number;
+  /** User agent for the MCP server */
+  userAgent?: string;
+  /** Delivery method for auth credentials (header or body) */
+  authCredentialsDelivery?: 'header' | 'body';
 }
 
 /**

@@ -68,6 +68,14 @@ program
     'Port for web or streamable-http transport (default: 3000)',
     (val) => parseInt(val, 10)
   )
+  .option(
+    '-a, --auth-credentials-delivery <header|body>',
+    'Delivery method for auth credentials (default: "header")'
+  )
+  .option(
+    '-u, --user-agent <string>',
+    'User agent for the MCP server (default: "")'
+  )
   .option('--force', 'Overwrite existing files without prompting')
   .version('2.0.0'); // Match package.json version
 
