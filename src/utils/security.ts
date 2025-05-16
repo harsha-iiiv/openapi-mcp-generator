@@ -163,15 +163,19 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         }
         
         console.error(\`Requesting OAuth2 token from \${tokenUrl}\`);
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': \`Basic \${Buffer.from(\`\${clientId}:\${clientSecret}\`).toString('base64')}\`
+        }
+
+        ${cliOptions?.userAgent ? `    headers['User-Agent'] = '${cliOptions?.userAgent}';` : ''}
         
         // Make the token request
         const response = await axios({
             method: 'POST',
             url: tokenUrl,
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Authorization': \`Basic \${Buffer.from(\`\${clientId}:\${clientSecret}\`).toString('base64')}\`
-            },
+            headers: headers,
             data: formData.toString()
         });
         
@@ -437,7 +441,7 @@ async function executeApiTool(
     const headers: Record<string, string> = { 'Accept': 'application/json' };
     let requestBodyData: any = undefined;
 
-${cliOptions?.userAgent ? `headers['User-Agent'] = options.userAgent;` : ''}
+${cliOptions?.userAgent ? `    headers['User-Agent'] = '${cliOptions?.userAgent}';` : ''}
 
     // Apply parameters to the URL path, query, or headers
     definition.executionParameters.forEach((param) => {
