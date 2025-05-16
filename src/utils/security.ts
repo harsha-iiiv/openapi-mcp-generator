@@ -2,6 +2,7 @@
  * Security handling utilities for OpenAPI to MCP generator
  */
 import { OpenAPIV3 } from 'openapi-types';
+import { CliOptions } from '../types/index.js';
 
 /**
  * Get environment variable name for a security scheme
@@ -80,9 +81,10 @@ export function generateHttpSecurityCode(): string {
 /**
  * Generates code for OAuth2 token acquisition
  *
+ * @param cliOptions CLI options
  * @returns Generated code for OAuth2 token acquisition
  */
-export function generateOAuth2TokenAcquisitionCode(): string {
+export function generateOAuth2TokenAcquisitionCode(cliOptions?: CliOptions): string {
   return `
 /**
  * Type definition for cached OAuth tokens
@@ -109,9 +111,9 @@ declare global {
 async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<string | null | undefined> {
     try {
         // Check if we have the necessary credentials
-        const clientId = process.env[\`${getEnvVarName('schemeName', 'OAUTH_CLIENT_ID')}\`];
-        const clientSecret = process.env[\`${getEnvVarName('schemeName', 'OAUTH_CLIENT_SECRET')}\`];
-        const scopes = process.env[\`${getEnvVarName('schemeName', 'OAUTH_SCOPES')}\`];
+        const clientId = process.env[\`\${getEnvVarName(schemeName, 'OAUTH_CLIENT_ID')}\`];
+        const clientSecret = process.env[\`\${getEnvVarName(schemeName, 'OAUTH_CLIENT_SECRET')}\`];
+        const scopes = process.env[\`\${getEnvVarName(schemeName, 'OAUTH_SCOPES')}\`];
         
         if (!clientId || !clientSecret) {
             console.error(\`Missing client credentials for OAuth2 scheme '\${schemeName}'\`);
@@ -149,6 +151,11 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         // Prepare the token request
         let formData = new URLSearchParams();
         formData.append('grant_type', 'client_credentials');
+
+        ${cliOptions?.authCredentialsDelivery === 'body' ? `
+            formData.append('client_id', clientId);
+            formData.append('client_secret', clientSecret);
+        ` : ''}
         
         // Add scopes if specified
         if (scopes) {
@@ -156,15 +163,19 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         }
         
         console.error(\`Requesting OAuth2 token from \${tokenUrl}\`);
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': \`Basic \${Buffer.from(\`\${clientId}:\${clientSecret}\`).toString('base64')}\`
+        }
+
+        ${cliOptions?.userAgent ? `    headers['User-Agent'] = '${cliOptions?.userAgent}';` : ''}
         
         // Make the token request
         const response = await axios({
             method: 'POST',
             url: tokenUrl,
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Authorization': \`Basic \${Buffer.from(\`\${clientId}:\${clientSecret}\`).toString('base64')}\`
-            },
+            headers: headers,
             data: formData.toString()
         });
         
@@ -191,6 +202,30 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         return null;
     }
 }
+
+/**
+ * Get environment variable name for a security scheme
+ *
+ * @param schemeName Security scheme name
+ * @param type Type of security credentials
+ * @returns Environment variable name
+ */
+export function getEnvVarName(
+  schemeName: string,
+  type:
+    | 'API_KEY'
+    | 'BEARER_TOKEN'
+    | 'BASIC_USERNAME'
+    | 'BASIC_PASSWORD'
+    | 'OAUTH_CLIENT_ID'
+    | 'OAUTH_CLIENT_SECRET'
+    | 'OAUTH_TOKEN'
+    | 'OAUTH_SCOPES'
+    | 'OPENID_TOKEN'
+): string {
+  const sanitizedName = schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+  return \`\${type}_\${sanitizedName}\`;
+}
 `;
 }
 
@@ -198,13 +233,15 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
  * Generates code for executing API tools with security handling
  *
  * @param securitySchemes Security schemes from OpenAPI spec
+ * @param cliOptions CLI options
  * @returns Generated code for the execute API tool function
  */
 export function generateExecuteApiToolFunction(
-  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes']
+  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes'],
+  cliOptions?: CliOptions,
 ): string {
   // Generate OAuth2 token acquisition function
-  const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode();
+  const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode(cliOptions);
 
   // Generate security handling code for checking, applying security
   const securityCode = `
@@ -403,6 +440,8 @@ async function executeApiTool(
     const queryParams: Record<string, any> = {};
     const headers: Record<string, string> = { 'Accept': 'application/json' };
     let requestBodyData: any = undefined;
+
+${cliOptions?.userAgent ? `    headers['User-Agent'] = '${cliOptions?.userAgent}';` : ''}
 
     // Apply parameters to the URL path, query, or headers
     definition.executionParameters.forEach((param) => {
