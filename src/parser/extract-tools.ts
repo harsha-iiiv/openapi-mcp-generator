@@ -171,7 +171,35 @@ export function mapOpenApiSchemaToJsonSchema(
   if (typeof schema === 'boolean') return schema;
 
   // Create a copy of the schema to modify
-  const jsonSchema: JSONSchema7 = { ...schema } as any;
+  let jsonSchema: JSONSchema7 = { ...schema } as any;
+
+  if (schema.oneOf || schema.anyOf || schema.allOf) {
+    const oneSchema = structuredClone(schema.oneOf || schema.anyOf || schema.allOf);
+
+    if (oneSchema) {
+      const combinedSchema = mapOpenApiSchemaToJsonSchema(oneSchema[0]);
+      
+      for (let i = 1; i < oneSchema.length; i++) {
+        const mappedSubSchema = mapOpenApiSchemaToJsonSchema(oneSchema[i]);
+        if (typeof mappedSubSchema === 'object' && typeof combinedSchema === 'object') {
+          // Handle enum values
+          if (mappedSubSchema.enum) {
+            if (!combinedSchema.enum) {
+              combinedSchema.enum = [];
+            }
+            // Combine enum values from both schemas
+            const uniqueEnums = new Set([
+              ...combinedSchema.enum,
+              ...(mappedSubSchema.enum || [])
+            ]);
+            combinedSchema.enum = Array.from(uniqueEnums);
+          }
+        }
+      }
+
+      jsonSchema = combinedSchema as JSONSchema7;
+    }
+  }
 
   // Convert integer type to number (JSON Schema compatible)
   if (schema.type === 'integer') jsonSchema.type = 'number';
