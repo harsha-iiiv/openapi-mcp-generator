@@ -85,6 +85,11 @@ program
 // Export the program object for use in bin stub
 export { program };
 
+// Run the program if this file is executed directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+  program.parse();
+}
+
 /**
  * Main function to run the generator
  */
