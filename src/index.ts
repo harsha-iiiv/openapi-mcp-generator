@@ -32,7 +32,8 @@ import {
 import { CliOptions, TransportType } from './types/index.js';
 
 // Export programmatic API
-export { getToolsFromOpenApi, McpToolDefinition, GetToolsOptions } from './api.js';
+export { getToolsFromOpenApi } from './api.js';
+export type { McpToolDefinition, GetToolsOptions } from './api.js';
 
 // Configure CLI
 const program = new Command();
