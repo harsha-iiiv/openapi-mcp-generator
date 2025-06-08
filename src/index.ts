@@ -32,7 +32,8 @@ import {
 import { CliOptions, TransportType } from './types/index.js';
 
 // Export programmatic API
-export { getToolsFromOpenApi, McpToolDefinition, GetToolsOptions } from './api.js';
+export { getToolsFromOpenApi } from './api.js';
+export type { McpToolDefinition, GetToolsOptions } from './api.js';
 
 // Configure CLI
 const program = new Command();
@@ -83,6 +84,11 @@ program
 
 // Export the program object for use in bin stub
 export { program };
+
+// Run the program if this file is executed directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+  program.parse();
+}
 
 /**
  * Main function to run the generator
