@@ -17,6 +17,7 @@
         "README.md",
         "LICENSE"
     ],
+    "types": "dist/index.d.ts",
     "scripts": {
         "start": "node dist/index.js",
         "clean": "rimraf dist",
