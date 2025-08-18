@@ -22,7 +22,7 @@ This function extracts an array of tools from an OpenAPI specification.
 
 **Parameters:**
 
-- `specPathOrUrl`: Path to a local OpenAPI spec file or URL to a remote spec
+- `specPathOrUrl`: Path to a local OpenAPI spec file, URL to a remote spec, or a pre-parsed OpenAPIV3.Document
 - `options`: (Optional) Configuration options
 
 **Options:**
@@ -62,6 +62,17 @@ for (const tool of filteredTools) {
   console.log(`  Method: ${tool.method.toUpperCase()} ${tool.pathTemplate}`);
   console.log(`  OperationId: ${tool.operationId}`);
 }
+
+// Using a pre-parsed OpenAPI document (helpful when @apidevtools/swagger-parser fails)
+import { parse } from '@readme/openapi-parser';
+import { OpenAPIV3 } from 'openapi-types';
+
+const api = await parse<OpenAPIV3.Document>(
+  'https://problematic-api-spec.com/openapi.json',
+  { dereference: { circular: true } }
+);
+
+const tools = await getToolsFromOpenApi(api);
 ```
 
 ## Tool Definition Structure

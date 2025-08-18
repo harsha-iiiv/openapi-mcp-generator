@@ -10,6 +10,16 @@ import { McpToolDefinition } from './types/index.js';
 import { determineBaseUrl } from './utils/url.js';
 
 /**
+ * Type guard to check if the input is an OpenAPI document
+ *
+ * @param spec Input that could be a string or OpenAPIV3.Document
+ * @returns True if input is an OpenAPIV3.Document, false otherwise
+ */
+function isOpenApiDocument(spec: string | OpenAPIV3.Document): spec is OpenAPIV3.Document {
+  return typeof spec === 'object' && spec !== null && 'openapi' in spec;
+}
+
+/**
  * Options for generating the MCP tools
  */
 export interface GetToolsOptions {
@@ -29,19 +39,32 @@ export interface GetToolsOptions {
 /**
  * Get a list of tools from an OpenAPI specification
  *
- * @param specPathOrUrl Path or URL to the OpenAPI specification
+ * @param specPathOrUrl Path or URL to the OpenAPI specification, or a pre-parsed OpenAPI document
  * @param options Options for generating the tools
  * @returns Promise that resolves to an array of tool definitions
  */
 export async function getToolsFromOpenApi(
-  specPathOrUrl: string,
+  specPathOrUrl: string | OpenAPIV3.Document,
   options: GetToolsOptions = {}
 ): Promise<McpToolDefinition[]> {
   try {
-    // Parse the OpenAPI spec
-    const api = options.dereference
-      ? ((await SwaggerParser.dereference(specPathOrUrl)) as OpenAPIV3.Document)
-      : ((await SwaggerParser.parse(specPathOrUrl)) as OpenAPIV3.Document);
+    // Parse the OpenAPI spec or use the provided document
+    let api: OpenAPIV3.Document;
+    
+    if (isOpenApiDocument(specPathOrUrl)) {
+      // Input is already a parsed OpenAPI document
+      api = specPathOrUrl;
+      
+      // If dereference option is requested, apply it to the document
+      if (options.dereference) {
+        api = (await SwaggerParser.dereference(api)) as OpenAPIV3.Document;
+      }
+    } else {
+      // Input is a string path or URL, parse it
+      api = options.dereference
+        ? ((await SwaggerParser.dereference(specPathOrUrl)) as OpenAPIV3.Document)
+        : ((await SwaggerParser.parse(specPathOrUrl)) as OpenAPIV3.Document);
+    }
 
     // Extract tools from the API
     const allTools = extractToolsFromApi(api);
