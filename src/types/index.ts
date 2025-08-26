@@ -35,6 +35,8 @@ export interface CliOptions {
    * false = exclude by default unless x-mcp explicitly enables.
    */
   defaultInclude?: boolean;
+  /** Whether to pass through authentication headers to the API */
+  passthroughAuth?: boolean;
 }
 
 /**

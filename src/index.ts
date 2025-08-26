@@ -86,6 +86,7 @@ program
     },
     true
   )
+  .option('--passthrough-auth', 'Pass through authentication headers to the API')
   .option('--force', 'Overwrite existing files without prompting')
   .version(pkg.version) // Match package.json version
   .action((options) => {

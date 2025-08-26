@@ -208,6 +208,11 @@ export function generateExecuteApiToolFunction(
 
   // Generate security handling code for checking, applying security
   const securityCode = `
+    function getHeaderValue(headers: IsomorphicHeaders | undefined, key: string): string | undefined {
+        const value = headers?.[key];
+        return Array.isArray(value) ? value[0] : value;
+    }
+
     // Apply security requirements if available
     // Security requirements use OR between array items and AND within each object
     const appliedSecurity = definition.securityRequirements?.find(req => {
@@ -218,17 +223,18 @@ export function generateExecuteApiToolFunction(
             
             // API Key security (header, query, cookie)
             if (scheme.type === 'apiKey') {
-                return !!process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                return !!(process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] || getHeaderValue(sessionHeaders,scheme.name.toLowerCase()));
             }
             
             // HTTP security (basic, bearer)
             if (scheme.type === 'http') {
                 if (scheme.scheme?.toLowerCase() === 'bearer') {
-                    return !!process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                    return !!(process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] || getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer '));
                 }
                 else if (scheme.scheme?.toLowerCase() === 'basic') {
-                    return !!process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] && 
-                           !!process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                    return (!!(process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] &&
+                           !!process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`])  ||
+                           getHeaderValue(sessionHeaders,'authorization')?.startsWith('Basic '));
                 }
             }
             
@@ -253,7 +259,7 @@ export function generateExecuteApiToolFunction(
             
             // OpenID Connect
             if (scheme.type === 'openIdConnect') {
-                return !!process.env[\`OPENID_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                return !!(process.env[\`OPENID_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] || getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer '));
             }
             
             return false;
@@ -268,7 +274,7 @@ export function generateExecuteApiToolFunction(
             
             // API Key security
             if (scheme?.type === 'apiKey') {
-                const apiKey = process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                const apiKey = (process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] || getHeaderValue(sessionHeaders,scheme.name.toLowerCase()));
                 if (apiKey) {
                     if (scheme.in === 'header') {
                         headers[scheme.name.toLowerCase()] = apiKey;
@@ -292,6 +298,9 @@ export function generateExecuteApiToolFunction(
                     if (token) {
                         headers['authorization'] = \`Bearer \${token}\`;
                         console.error(\`Applied Bearer token for '\${schemeName}'\`);
+                    } else if (getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer ')) {
+                        headers['authorization'] = getHeaderValue(sessionHeaders,'authorization')!;
+                        console.error(\`Applied Bearer token for '\${schemeName}' from session headers\`);
                     }
                 } 
                 else if (scheme.scheme?.toLowerCase() === 'basic') {
@@ -300,6 +309,9 @@ export function generateExecuteApiToolFunction(
                     if (username && password) {
                         headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
                         console.error(\`Applied Basic authentication for '\${schemeName}'\`);
+                    } else if (getHeaderValue(sessionHeaders,'authorization')?.startsWith('Basic ')) {
+                        headers['authorization'] = getHeaderValue(sessionHeaders,'authorization')!;
+                        console.error(\`Applied Basic authentication for '\${schemeName}' from session headers\`);
                     }
                 }
             }
@@ -338,6 +350,9 @@ export function generateExecuteApiToolFunction(
                     if (scopes && scopes.length > 0) {
                         console.error(\`Requested scopes: \${scopes.join(', ')}\`);
                     }
+                } else if (getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer ')) {
+                    headers['authorization'] = getHeaderValue(sessionHeaders,'authorization')!;
+                    console.error(\`Applied OpenID Connect token for '\${schemeName}' from session headers\`);
                 }
             }
         }
@@ -379,7 +394,8 @@ async function executeApiTool(
     toolName: string,
     definition: McpToolDefinition,
     toolArgs: JsonObject,
-    allSecuritySchemes: Record<string, any>
+    allSecuritySchemes: Record<string, any>,
+    sessionHeaders: IsomorphicHeaders | undefined
 ): Promise<CallToolResult> {
   try {
     // Validate arguments against the input schema

@@ -31,7 +31,7 @@ export function generatePackageJson(
       node: '>=20.0.0',
     },
     dependencies: {
-      '@modelcontextprotocol/sdk': '^1.10.0',
+      '@modelcontextprotocol/sdk': '^1.17.4',
       axios: '^1.9.0',
       dotenv: '^16.4.5',
       zod: '^3.24.3',
