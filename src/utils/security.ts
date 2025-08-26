@@ -274,7 +274,7 @@ export function generateExecuteApiToolFunction(
             
             // API Key security
             if (scheme?.type === 'apiKey') {
-                const apiKey = (process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] || getHeaderValue(sessionHeaders,scheme.name.toLowerCase()));
+                const apiKey = process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] ?? getHeaderValue(sessionHeaders,scheme.name.toLowerCase());
                 if (apiKey) {
                     if (scheme.in === 'header') {
                         headers[scheme.name.toLowerCase()] = apiKey;
