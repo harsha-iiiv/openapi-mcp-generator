@@ -126,6 +126,7 @@ Launches a fully functional HTTP server with:
 - In-browser test client UI
 - Multi-connection support
 - Built with lightweight Hono framework
+- Optional pass-through auth headers
 
 ### StreamableHTTP
 
@@ -138,6 +139,7 @@ Implements the MCP StreamableHTTP transport which offers:
 - Compatibility with MCP StreamableHTTPClientTransport
 - In-browser test client UI
 - Built with lightweight Hono framework
+- Optional pass-through auth headers
 
 ### Transport Comparison
 
@@ -152,6 +154,7 @@ Implements the MCP StreamableHTTP transport which offers:
 | Load balancing     | No                  | Limited           | Yes                |
 | Status codes       | No                  | Limited           | Full HTTP codes    |
 | Headers            | No                  | Limited           | Full HTTP headers  |
+| Pass-through Auth  | No                  | Optional          | Optional           |
 | Test client        | No                  | Yes               | Yes                |
 
 ---
@@ -166,6 +169,33 @@ Configure auth credentials in your environment:
 | Bearer     | `BEARER_TOKEN_<SCHEME_NAME>`                                                                       |
 | Basic Auth | `BASIC_USERNAME_<SCHEME_NAME>`, `BASIC_PASSWORD_<SCHEME_NAME>`                                     |
 | OAuth2     | `OAUTH_CLIENT_ID_<SCHEME_NAME>`, `OAUTH_CLIENT_SECRET_<SCHEME_NAME>`, `OAUTH_SCOPES_<SCHEME_NAME>` |
+
+---
+
+## 🔐 Pass-through Headers for Authentication
+
+Use the CLI option `--passthrough-auth` to have the server pass-through client auth headers to the downstream API. The headers forwarded are for the auth schemes defined in the OpenAPI spec. Scheme types http (bearer or basic), apiKey (header, query param, or cookie), and openIdConnect bearer tokens are supported.
+
+The client should configure the auth credentials to be sent, for example:
+
+```
+"mcpServers": {
+      "my-api": {
+        "transport": "HTTP",
+        "url": "http://localhost:3000/sse",
+        "headers": {
+          "Authorization": "Bearer MY_TOKEN"
+        }
+      },
+      "my-other-api": {
+        "transport": "Streamable-HTTP",
+        "url": "http://localhost:4000/mcp",
+        "headers": {
+          "X-API-Key": "MY_API_KEY"
+        }
+      },
+}
+```
 
 ---
 
