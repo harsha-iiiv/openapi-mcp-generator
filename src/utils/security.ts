@@ -223,18 +223,18 @@ export function generateExecuteApiToolFunction(
             
             // API Key security (header, query, cookie)
             if (scheme.type === 'apiKey') {
-                return !!(process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] || getHeaderValue(sessionHeaders,scheme.name.toLowerCase()));
+                return !!(getHeaderValue(sessionHeaders,scheme.name.toLowerCase()) || process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`]);
             }
             
             // HTTP security (basic, bearer)
             if (scheme.type === 'http') {
                 if (scheme.scheme?.toLowerCase() === 'bearer') {
-                    return !!(process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] || getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer '));
+                    return !!(getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer ') || process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`]);
                 }
                 else if (scheme.scheme?.toLowerCase() === 'basic') {
-                    return (!!(process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] &&
-                           !!process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`])  ||
-                           getHeaderValue(sessionHeaders,'authorization')?.startsWith('Basic '));
+                    return (!!(getHeaderValue(sessionHeaders,'authorization')?.startsWith('Basic ') ||
+                           !!process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] &&
+                           !!process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`]));
                 }
             }
             
@@ -259,7 +259,7 @@ export function generateExecuteApiToolFunction(
             
             // OpenID Connect
             if (scheme.type === 'openIdConnect') {
-                return !!(process.env[\`OPENID_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] || getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer '));
+                return !!(getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer ') || process.env[\`OPENID_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`]);
             }
             
             return false;
@@ -274,7 +274,7 @@ export function generateExecuteApiToolFunction(
             
             // API Key security
             if (scheme?.type === 'apiKey') {
-                const apiKey = process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] ?? getHeaderValue(sessionHeaders,scheme.name.toLowerCase());
+                const apiKey = getHeaderValue(sessionHeaders,scheme.name.toLowerCase()) ?? process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
                 if (apiKey) {
                     if (scheme.in === 'header') {
                         headers[scheme.name.toLowerCase()] = apiKey;
@@ -294,24 +294,28 @@ export function generateExecuteApiToolFunction(
             // HTTP security (Bearer or Basic)
             else if (scheme?.type === 'http') {
                 if (scheme.scheme?.toLowerCase() === 'bearer') {
-                    const token = process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                    if (token) {
-                        headers['authorization'] = \`Bearer \${token}\`;
-                        console.error(\`Applied Bearer token for '\${schemeName}'\`);
-                    } else if (getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer ')) {
+                    if (getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer ')) {
                         headers['authorization'] = getHeaderValue(sessionHeaders,'authorization')!;
                         console.error(\`Applied Bearer token for '\${schemeName}' from session headers\`);
+                    } else {
+                        const token = process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                        if (token) {
+                            headers['authorization'] = \`Bearer \${token}\`;
+                            console.error(\`Applied Bearer token for '\${schemeName}'\`);
+                        }
                     }
                 } 
                 else if (scheme.scheme?.toLowerCase() === 'basic') {
-                    const username = process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                    const password = process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                    if (username && password) {
-                        headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
-                        console.error(\`Applied Basic authentication for '\${schemeName}'\`);
-                    } else if (getHeaderValue(sessionHeaders,'authorization')?.startsWith('Basic ')) {
+                    if (getHeaderValue(sessionHeaders,'authorization')?.startsWith('Basic ')) {
                         headers['authorization'] = getHeaderValue(sessionHeaders,'authorization')!;
                         console.error(\`Applied Basic authentication for '\${schemeName}' from session headers\`);
+                    } else {
+                        const username = process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                        const password = process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                        if (username && password) {
+                            headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
+                            console.error(\`Applied Basic authentication for '\${schemeName}'\`);
+                        } 
                     }
                 }
             }
@@ -340,19 +344,20 @@ export function generateExecuteApiToolFunction(
             }
             // OpenID Connect
             else if (scheme?.type === 'openIdConnect') {
-                const token = process.env[\`OPENID_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                if (token) {
-                    headers['authorization'] = \`Bearer \${token}\`;
-                    console.error(\`Applied OpenID Connect token for '\${schemeName}'\`);
-                    
-                    // List the scopes that were requested, if any
-                    const scopes = scopesArray as string[];
-                    if (scopes && scopes.length > 0) {
-                        console.error(\`Requested scopes: \${scopes.join(', ')}\`);
-                    }
-                } else if (getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer ')) {
+               if (getHeaderValue(sessionHeaders,'authorization')?.startsWith('Bearer ')) {
                     headers['authorization'] = getHeaderValue(sessionHeaders,'authorization')!;
                     console.error(\`Applied OpenID Connect token for '\${schemeName}' from session headers\`);
+                } else {
+                    const token = process.env[\`OPENID_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                    if (token) {
+                        headers['authorization'] = \`Bearer \${token}\`;
+                        console.error(\`Applied OpenID Connect token for '\${schemeName}'\`);
+                        // List the scopes that were requested, if any
+                        const scopes = scopesArray as string[];
+                        if (scopes && scopes.length > 0) {
+                            console.error(\`Requested scopes: \${scopes.join(', ')}\`);
+                        }
+                    }
                 }
             }
         }
