@@ -87,16 +87,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
  *
  * @returns Generated code for the call tool handler
  */
-export function generateCallToolHandler(): string {
+export function generateCallToolHandler(passthroughAuth: boolean | undefined): string {
   return `
-server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest): Promise<CallToolResult> => {
+server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest, extra: RequestHandlerExtra<ServerRequest, ServerNotification>): Promise<CallToolResult> => {
   const { name: toolName, arguments: toolArgs } = request.params;
   const toolDefinition = toolDefinitionMap.get(toolName);
   if (!toolDefinition) {
     console.error(\`Error: Unknown tool requested: \${toolName}\`);
     return { content: [{ type: "text", text: \`Error: Unknown tool requested: \${toolName}\` }] };
   }
-  return await executeApiTool(toolName, toolDefinition, toolArgs ?? {}, securitySchemes);
+  let sessionHeaders = ${passthroughAuth ? 'extra.requestInfo?.headers' : 'undefined'};
+  return await executeApiTool(toolName, toolDefinition, toolArgs ?? {}, securitySchemes, sessionHeaders);
 });
 `;
 }
