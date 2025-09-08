@@ -413,8 +413,12 @@ async function executeApiTool(
             }
             else if (param.in === 'query') {
                 // Convert arrays to comma-separated strings for query parameters
-                queryParams[param.name] = Array.isArray(value) ? value.join(',') : value;
-            }
+                queryParams[param.name] = Array.isArray(value)
+                  ? value
+                      .filter((v) => v !== undefined && v !== null)
+                      .map((v) => String(v))
+                      .join(',')
+                  : value;            }
             else if (param.in === 'header') {
                 headers[param.name.toLowerCase()] = String(value);
             }
