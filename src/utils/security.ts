@@ -412,7 +412,8 @@ async function executeApiTool(
                 urlPath = urlPath.replace(\`{\${param.name}}\`, encodeURIComponent(String(value)));
             }
             else if (param.in === 'query') {
-                queryParams[param.name] = value;
+                // Convert arrays to comma-separated strings for query parameters
+                queryParams[param.name] = Array.isArray(value) ? value.join(',') : value;
             }
             else if (param.in === 'header') {
                 headers[param.name.toLowerCase()] = String(value);
