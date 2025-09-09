@@ -62,7 +62,7 @@ export function extractToolsFromApi(
       }
 
       // Generate a unique name for the tool
-      let baseName = operation.operationId || generateOperationId(method, path);
+      let baseName = operation.summary || generateOperationId(method, path);
       if (!baseName) continue;
 
       // Sanitize the name to be MCP-compatible (only a-z, 0-9, _, -)
