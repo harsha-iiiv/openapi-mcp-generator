@@ -82,7 +82,7 @@ export function generateHttpSecurityCode(): string {
  *
  * @returns Generated code for OAuth2 token acquisition
  */
-export function generateOAuth2TokenAcquisitionCode(): string {
+export function generateOAuth2TokenAcquisitionCode(insecure?: boolean): string {
   return `
 /**
  * Type definition for cached OAuth tokens
@@ -165,7 +165,8 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
                 'Content-Type': 'application/x-www-form-urlencoded',
                 'Authorization': \`Basic \${Buffer.from(\`\${clientId}:\${clientSecret}\`).toString('base64')}\`
             },
-            data: formData.toString()
+            data: formData.toString(),
+            ${insecure ? 'httpsAgent: new https.Agent({ rejectUnauthorized: false })' : ''}
         });
         
         // Process the response
@@ -201,10 +202,10 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
  * @returns Generated code for the execute API tool function
  */
 export function generateExecuteApiToolFunction(
-  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes']
+  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes'], insecure?: boolean
 ): string {
   // Generate OAuth2 token acquisition function
-  const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode();
+  const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode(insecure);
 
   // Generate security handling code for checking, applying security
   const securityCode = `
@@ -443,6 +444,7 @@ ${securityCode}
       params: queryParams, 
       headers: headers,
       ...(requestBodyData !== undefined && { data: requestBodyData }),
+      ${insecure ? 'httpsAgent: new https.Agent({ rejectUnauthorized: false })' : ''}
     };
 
     // Log request info to stderr (doesn't affect MCP output)

@@ -35,7 +35,7 @@ export function generateMcpServerCode(
 
   // Generate code for API tool execution
   const executeApiToolFunctionCode = generateExecuteApiToolFunction(
-    api.components?.securitySchemes
+    api.components?.securitySchemes, options.insecure,
   );
 
   // Generate code for request handlers
@@ -105,6 +105,7 @@ import {
 import { z, ZodError } from 'zod';
 import { jsonSchemaToZod } from 'json-schema-to-zod';
 import axios, { type AxiosRequestConfig, type AxiosError } from 'axios';
+import https from 'https';
 
 /**
  * Type definition for JSON objects
