@@ -59,7 +59,7 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 | `--port`            | `-p`  | Port for web-based transports                                                                                                                  | `3000`                            |
 | `--default-include` |       | Default behavior for x-mcp filtering. Accepts `true` or `false` (case-insensitive). `true` = include by default, `false` = exclude by default. | `true`                            |
 | `--force`           |       | Overwrite existing files in the output directory without confirmation                                                                          | `false`                           |
-| `--insecure`        | `-k`  | Allow insecure HTTPS connections (self-signed certificates) | `false`                           |
+| `--insecure`        | `-k`  | Allow insecure HTTPS connections (self-signed certificates)                                                                                    | `false`                           |
 
 ## 📦 Programmatic API
 

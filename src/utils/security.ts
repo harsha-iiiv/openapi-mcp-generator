@@ -202,7 +202,8 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
  * @returns Generated code for the execute API tool function
  */
 export function generateExecuteApiToolFunction(
-  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes'], insecure?: boolean
+  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes'],
+  insecure?: boolean
 ): string {
   // Generate OAuth2 token acquisition function
   const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode(insecure);
