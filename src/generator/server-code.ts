@@ -45,13 +45,14 @@ export function generateMcpServerCode(
   // Determine which transport to include
   let transportImport = '';
   let transportCode = '';
+  const webServicerPortNumberStatement = `${options.port ?? "process.env['PORT'] === undefined ? undefined : parseInt(process.env['PORT'], 10)"}`;
 
   switch (options.transport) {
     case 'web':
       transportImport = `\nimport { setupWebServer } from "./web-server.js";`;
       transportCode = `// Set up Web Server transport
   try {
-    await setupWebServer(server, ${options.port || 3000});
+    await setupWebServer(server, ${webServicerPortNumberStatement});
   } catch (error) {
     console.error("Error setting up web server:", error);
     process.exit(1);
@@ -61,7 +62,7 @@ export function generateMcpServerCode(
       transportImport = `\nimport { setupStreamableHttpServer } from "./streamable-http.js";`;
       transportCode = `// Set up StreamableHTTP transport
   try {
-    await setupStreamableHttpServer(server, ${options.port || 3000});
+    await setupStreamableHttpServer(server, ${webServicerPortNumberStatement});
   } catch (error) {
     console.error("Error setting up StreamableHTTP server:", error);
     process.exit(1);
@@ -89,8 +90,8 @@ export function generateMcpServerCode(
  */
 
 // Load environment variables from .env file
-import dotenv from 'dotenv';
-dotenv.config();
+import { config } from 'dotenv';
+config();
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
