@@ -82,6 +82,25 @@ export function generateMcpServerCode(
       break;
   }
 
+  const mainDeclaration= options.generateLib === true ? '' : `
+/**
+ * Cleanup function for graceful shutdown
+ */
+async function cleanup() {
+    console.error("Shutting down MCP server...");
+    process.exit(0);
+}
+
+// Register signal handlers
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
+
+// Start the server
+main().catch((error) => {
+  console.error("Fatal error in main execution:", error);
+  process.exit(1);
+});`;
+
   // Generate the full server code
   return `#!/usr/bin/env node
 /**
@@ -160,27 +179,11 @@ ${executeApiToolFunctionCode}
 /**
  * Main function to start the server
  */
-async function main() {
+${options.generateLib === true ? 'export ' : ''}async function main() {
 ${transportCode}
 }
 
-/**
- * Cleanup function for graceful shutdown
- */
-async function cleanup() {
-    console.error("Shutting down MCP server...");
-    process.exit(0);
-}
-
-// Register signal handlers
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
-
-// Start the server
-main().catch((error) => {
-  console.error("Fatal error in main execution:", error);
-  process.exit(1);
-});
+${mainDeclaration}
 
 /**
  * Formats API errors for better readability

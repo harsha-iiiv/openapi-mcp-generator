@@ -74,6 +74,11 @@ program
     (val) => parseInt(val, 10)
   )
   .option(
+    '-l, --generate-lib <number>',
+    'Indicates whether a library should be generated and hence the \'main\' method not invoked (default: false)',
+    (val) => val === 'true'
+  )
+  .option(
     '--default-include <boolean>',
     'Default behavior for x-mcp filtering (true|false, case-insensitive). Default: true (include by default), false = exclude by default',
     (val) => {
