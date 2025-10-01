@@ -39,7 +39,7 @@ export function generateMcpServerCode(
   );
 
   // Generate code for request handlers
-  const callToolHandlerCode = generateCallToolHandler();
+  const callToolHandlerCode = generateCallToolHandler(options.passthroughAuth);
   const listToolsHandlerCode = generateListToolsHandler();
 
   // Determine which transport to include
@@ -99,8 +99,12 @@ import {
   ListToolsRequestSchema,
   type Tool,
   type CallToolResult,
-  type CallToolRequest
+  type CallToolRequest,
+  ServerRequest,
+  ServerNotification,
+  IsomorphicHeaders
 } from "@modelcontextprotocol/sdk/types.js";${transportImport}
+import { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
 
 import { z, ZodError } from 'zod';
 import { jsonSchemaToZod } from 'json-schema-to-zod';

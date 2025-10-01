@@ -19,7 +19,7 @@ import { serve } from '@hono/node-server';
 import { streamSSE } from 'hono/streaming';
 import { v4 as uuid } from 'uuid';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { JSONRPCMessage, JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
+import { JSONRPCMessage, JSONRPCMessageSchema, MessageExtraInfo } from "@modelcontextprotocol/sdk/types.js";
 import type { Context } from 'hono';
 import type { SSEStreamingApi } from 'hono/streaming';
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -37,7 +37,7 @@ private messageUrl: string;
 
 onclose?: () => void;
 onerror?: (error: Error) => void;
-onmessage?: (message: JSONRPCMessage) => void;
+onmessage?: (message: JSONRPCMessage, extra?: MessageExtraInfo) => void;
 
 constructor(messageUrl: string, stream: SSEStreamingApi) {
   this._sessionId = uuid();
@@ -105,7 +105,7 @@ async handlePostMessage(c: Context): Promise<Response> {
       
       // Forward to the message handler
       if (this.onmessage) {
-        this.onmessage(parsedMessage);
+        this.onmessage(parsedMessage, {requestInfo: {headers: c.req.header()}});
         return c.text('Accepted', 202);
       } else {
         return c.text('No message handler defined', 500);
