@@ -74,9 +74,10 @@ program
     (val) => parseInt(val, 10)
   )
   .option(
-    '-l, --generate-lib <number>',
+    '-l, --generate-lib <boolean>',
     'Indicates whether a library should be generated and hence the \'main\' method not invoked (default: false)',
-    (val) => val === 'true'
+    (val) => normalizeBoolean(val),
+    false
   )
   .option(
     '--default-include <boolean>',
