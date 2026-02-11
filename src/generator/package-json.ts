@@ -23,7 +23,7 @@ export function generatePackageJson(
     files: ['build', 'src'],
     scripts: {
       start: 'node build/index.js',
-      build: 'tsc && chmod 755 build/index.js',
+      build: 'tsc && shx chmod 755 build/index.js',
       typecheck: 'tsc --noEmit',
       prestart: 'npm run build',
     },
@@ -40,6 +40,7 @@ export function generatePackageJson(
     devDependencies: {
       '@types/node': '^22.15.2',
       typescript: '^5.8.3',
+      "shx": "^0.4.0",
     },
   };
 
