@@ -40,7 +40,7 @@ export function generatePackageJson(
     devDependencies: {
       '@types/node': '^22.15.2',
       typescript: '^5.8.3',
-      "shx": "^0.4.0",
+      shx: '^0.4.0',
     },
   };
 
