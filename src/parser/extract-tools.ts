@@ -102,6 +102,7 @@ export function extractToolsFromApi(
         requestBodyContentType,
         securityRequirements,
         operationId: baseName,
+        tags: operation.tags,
       });
     }
   }
