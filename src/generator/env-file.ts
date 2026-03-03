@@ -19,6 +19,9 @@ export function generateEnvExample(
 # Server configuration
 PORT=3000
 LOG_LEVEL=info
+# If you have a server outside the servers list from OpenAPI, define it here.
+# Otherwise, omit this.
+API_BASE_URL=your_api_base_url_here
 
 `;
 

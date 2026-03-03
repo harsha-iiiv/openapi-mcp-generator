@@ -130,7 +130,9 @@ interface McpToolDefinition {
  */
 export const SERVER_NAME = "${serverName}";
 export const SERVER_VERSION = "${serverVersion}";
-export const API_BASE_URL = "${determinedBaseUrl || ''}";
+// Base URL for the API, can be set via environment variable or determined from OpenAPI spec
+export const API_BASE_URL = process.env.API_BASE_URL || "${determinedBaseUrl || ''}";
+console.error("API_BASE_URL is set to:", API_BASE_URL);
 
 /**
  * MCP Server instance
