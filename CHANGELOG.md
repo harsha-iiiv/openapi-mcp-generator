@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-03-03
+
+### Added
+
+- `API_BASE_URL` environment variable support in generated server code; the env var takes precedence over the value from the OpenAPI `servers` section, with the resolved URL logged at startup.
+- `shx` dependency for cross-platform build script compatibility (fixes `chmod` on Windows).
+
+### Fixed
+
+- Path-level `parameters` are now correctly merged with operation-level parameters; operation-level values take precedence, preventing conflicts and incorrect requests.
+- Improved handling when path-level parameters are optional or missing, reducing edge-case errors and improving API compatibility.
+
 ## [3.2.0] - 2025-08-24
 
 ### Added
