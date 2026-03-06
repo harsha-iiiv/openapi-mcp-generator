@@ -34,7 +34,8 @@ import { normalizeBoolean } from './utils/helpers.js';
 import pkg from '../package.json' with { type: 'json' };
 
 // Export programmatic API
-export { getToolsFromOpenApi, McpToolDefinition, GetToolsOptions } from './api.js';
+export { getToolsFromOpenApi } from './api.js';
+export type { McpToolDefinition, GetToolsOptions } from './api.js';
 
 // Configure CLI
 const program = new Command();
@@ -87,6 +88,8 @@ program
     true
   )
   .option('--force', 'Overwrite existing files without prompting')
+  .option('--with-mcpcat', 'Enable MCPcat MCP product analytics')
+  .option('--with-otel', 'Enable OpenTelemetry (OTLP) logging')
   .version(pkg.version) // Match package.json version
   .action((options) => {
     runGenerator(options).catch((error) => {
@@ -161,7 +164,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     const packageJsonContent = generatePackageJson(
       serverName,
       serverVersion,
-      options.transport as TransportType
+      options
     );
 
     console.error('Generating tsconfig.json...');
@@ -180,7 +183,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     const jestConfigContent = generateJestConfig();
 
     console.error('Generating .env.example file...');
-    const envExampleContent = generateEnvExample(api.components?.securitySchemes);
+    const envExampleContent = generateEnvExample(api.components?.securitySchemes, options);
 
     console.error('Generating OAuth2 documentation...');
     const oauth2DocsContent = generateOAuth2Docs(api.components?.securitySchemes);
