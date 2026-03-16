@@ -35,6 +35,8 @@ export interface CliOptions {
    * false = exclude by default unless x-mcp explicitly enables.
    */
   defaultInclude?: boolean;
+  /** Allow insecure HTTPS connections (self-signed certificates) */
+  insecure?: boolean;
 }
 
 /**

@@ -87,6 +87,9 @@ program
     true
   )
   .option('--force', 'Overwrite existing files without prompting')
+  .option('-k, --insecure', 'Allow insecure HTTPS connections (self-signed certificates)', (val) =>
+    normalizeBoolean(val)
+  )
   .version(pkg.version) // Match package.json version
   .action((options) => {
     runGenerator(options).catch((error) => {
