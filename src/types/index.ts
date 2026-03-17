@@ -29,6 +29,8 @@ export interface CliOptions {
   transport?: TransportType;
   /** Server port (for web and streamable-http transports) */
   port?: number;
+  /** Whether the generated code should invoke the main method or expose the main method as a library */
+  generateLib?: boolean;
   /**
    * Default behavior for x-mcp filtering.
    * true (default) = include by default when x-mcp is missing or invalid;

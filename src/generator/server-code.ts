@@ -45,13 +45,14 @@ export function generateMcpServerCode(
   // Determine which transport to include
   let transportImport = '';
   let transportCode = '';
+  const webServicerPortNumberStatement = `${options.port ?? "process.env['PORT'] === undefined ? undefined : parseInt(process.env['PORT'], 10)"}`;
 
   switch (options.transport) {
     case 'web':
       transportImport = `\nimport { setupWebServer } from "./web-server.js";`;
       transportCode = `// Set up Web Server transport
   try {
-    await setupWebServer(server, ${options.port || 3000});
+    await setupWebServer(server, ${webServicerPortNumberStatement});
   } catch (error) {
     console.error("Error setting up web server:", error);
     process.exit(1);
@@ -61,7 +62,7 @@ export function generateMcpServerCode(
       transportImport = `\nimport { setupStreamableHttpServer } from "./streamable-http.js";`;
       transportCode = `// Set up StreamableHTTP transport
   try {
-    await setupStreamableHttpServer(server, ${options.port || 3000});
+    await setupStreamableHttpServer(server, ${webServicerPortNumberStatement});
   } catch (error) {
     console.error("Error setting up StreamableHTTP server:", error);
     process.exit(1);
@@ -81,6 +82,25 @@ export function generateMcpServerCode(
       break;
   }
 
+  const mainDeclaration= options.generateLib === true ? '' : `
+/**
+ * Cleanup function for graceful shutdown
+ */
+async function cleanup() {
+    console.error("Shutting down MCP server...");
+    process.exit(0);
+}
+
+// Register signal handlers
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
+
+// Start the server
+main().catch((error) => {
+  console.error("Fatal error in main execution:", error);
+  process.exit(1);
+});`;
+
   // Generate the full server code
   return `#!/usr/bin/env node
 /**
@@ -89,8 +109,8 @@ export function generateMcpServerCode(
  */
 
 // Load environment variables from .env file
-import dotenv from 'dotenv';
-dotenv.config();
+import { config } from 'dotenv';
+config();
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -161,27 +181,11 @@ ${executeApiToolFunctionCode}
 /**
  * Main function to start the server
  */
-async function main() {
+${options.generateLib === true ? 'export ' : ''}async function main() {
 ${transportCode}
 }
 
-/**
- * Cleanup function for graceful shutdown
- */
-async function cleanup() {
-    console.error("Shutting down MCP server...");
-    process.exit(0);
-}
-
-// Register signal handlers
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
-
-// Start the server
-main().catch((error) => {
-  console.error("Fatal error in main execution:", error);
-  process.exit(1);
-});
+${mainDeclaration}
 
 /**
  * Formats API errors for better readability
