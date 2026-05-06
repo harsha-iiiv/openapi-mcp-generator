@@ -1,3 +1,15 @@
 # These are supported funding model platforms
 
-github: harsha-iiiv
+github: harsha-iiiv         # GitHub Sponsors username
+patreon:                       # Add if you create one
+open_collective:               # Add if you create one
+ko_fi:                         # Add if you create one
+tidelift:                      # e.g., npm/babel
+community_bridge:
+liberapay:
+issuehunt:
+lfx_crowdfunding:
+polar:
+buy_me_a_coffee:
+thanks_dev:
+custom: ['https://github.com/sponsors/harsha-iiiv']   # Custom link to your sponsor page
