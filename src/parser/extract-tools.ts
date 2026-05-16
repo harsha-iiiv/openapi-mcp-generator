@@ -68,6 +68,12 @@ export function extractToolsFromApi(
       // Sanitize the name to be MCP-compatible (only a-z, 0-9, _, -)
       baseName = baseName.replace(/\./g, '_').replace(/[^a-z0-9_-]/gi, '_');
 
+      // Claude Desktop enforces a 64-character limit on tool names
+      const MAX_TOOL_NAME_LENGTH = 64;
+      if (baseName.length > MAX_TOOL_NAME_LENGTH) {
+        baseName = baseName.substring(0, MAX_TOOL_NAME_LENGTH);
+      }
+
       let finalToolName = baseName;
       let counter = 1;
       while (usedNames.has(finalToolName)) {
