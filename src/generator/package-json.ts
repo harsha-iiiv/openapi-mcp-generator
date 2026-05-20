@@ -1,17 +1,21 @@
+import { CliOptions } from '../types/index.js';
+
 /**
  * Generates the content of package.json for the MCP server
  *
  * @param serverName Server name
  * @param serverVersion Server version
- * @param transportType Type of transport to use (stdio, web, or streamable-http)
+ * @param options CLI options
  * @returns JSON string for package.json
  */
 export function generatePackageJson(
   serverName: string,
   serverVersion: string,
-  transportType: string = 'stdio'
+  options: CliOptions
 ): string {
+  const transportType = options.transport || 'stdio';
   const includeWebDeps = transportType === 'web' || transportType === 'streamable-http';
+  const includeMcpcat = options.withMcpcat || options.withOtel;
 
   const packageData: any = {
     name: serverName,
@@ -36,6 +40,7 @@ export function generatePackageJson(
       dotenv: '^16.4.5',
       zod: '^3.24.3',
       'json-schema-to-zod': '^2.6.1',
+      ...(includeMcpcat ? { mcpcat: '^0.1.5' } : {}),
     },
     devDependencies: {
       '@types/node': '^22.15.2',

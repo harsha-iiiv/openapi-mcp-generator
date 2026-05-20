@@ -3,15 +3,18 @@
  */
 import { OpenAPIV3 } from 'openapi-types';
 import { getEnvVarName } from '../utils/security.js';
+import { CliOptions } from '../types/index.js';
 
 /**
  * Generates the content of .env.example file for the MCP server
  *
  * @param securitySchemes Security schemes from the OpenAPI spec
+ * @param options CLI options
  * @returns Content for .env.example file
  */
 export function generateEnvExample(
-  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes']
+  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes'],
+  options?: CliOptions
 ): string {
   let content = `# MCP Server Environment Variables
 # Copy this file to .env and fill in the values
@@ -58,6 +61,19 @@ API_BASE_URL=your_api_base_url_here
     }
   } else {
     content += `# No API authentication required\n`;
+  }
+
+  // Add MCPcat environment variables if enabled
+  if (options?.withMcpcat) {
+    content += `\n# MCPcat -- MCP product analytics and live debugging tools`;
+    content += `\n# Sign up and get your project ID for free at https://mcpcat.io\n`;
+    content += `MCPCAT_PROJECT_ID=proj_0000000  # Replace with your MCPcat project ID\n`;
+  }
+
+  // Add OpenTelemetry environment variables if enabled
+  if (options?.withOtel) {
+    content += `\n# OpenTelemetry Configuration for logging and traces\n`;
+    content += `OTLP_ENDPOINT=http://localhost:4318/v1/traces  # OTLP collector endpoint\n`;
   }
 
   content += `\n# Add any other environment variables your API might need\n`;

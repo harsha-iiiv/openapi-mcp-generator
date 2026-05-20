@@ -20,6 +20,7 @@ This CLI tool automates the generation of MCP-compatible servers that proxy requ
 - 🔌 **Multiple Transports**: Communicate over stdio, SSE via Hono, or StreamableHTTP.
 - 🧰 **Project Scaffold**: Generates a complete Node.js project with `tsconfig.json`, `package.json`, and entry point.
 - 🧪 **Built-in HTML Test Clients**: Test API interactions visually in your browser (for web-based transports).
+- 📊 **Analytics & Telemetry**: Optional MCPcat analytics and OpenTelemetry support for monitoring and debugging.
 
 ---
 
@@ -44,6 +45,15 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 
 # Generate an MCP StreamableHTTP server
 openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir --transport=streamable-http --port=3000
+
+# Generate with MCPcat analytics enabled
+openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir --with-mcpcat
+
+# Generate with OpenTelemetry tracing enabled
+openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir --with-otel
+
+# Generate with both MCPcat analytics and OpenTelemetry
+openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir --with-mcpcat --with-otel
 ```
 
 ### CLI Options
@@ -58,6 +68,8 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 | `--transport`       | `-t`  | Transport mode: `"stdio"` (default), `"web"`, or `"streamable-http"`                                                                           | `"stdio"`                         |
 | `--port`            | `-p`  | Port for web-based transports                                                                                                                  | `3000`                            |
 | `--default-include` |       | Default behavior for x-mcp filtering. Accepts `true` or `false` (case-insensitive). `true` = include by default, `false` = exclude by default. | `true`                            |
+| `--with-mcpcat`     |       | Enable MCPcat product analytics for usage insights and debugging                                                                               | `false`                           |
+| `--with-otel`       |       | Enable OpenTelemetry (OTLP) exporters for distributed tracing and logging                                                                      | `false`                           |
 | `--force`           |       | Overwrite existing files in the output directory without confirmation                                                                          | `false`                           |
 
 ## 📦 Programmatic API
@@ -167,6 +179,43 @@ Configure auth credentials in your environment:
 | OAuth2     | `OAUTH_CLIENT_ID_<SCHEME_NAME>`, `OAUTH_CLIENT_SECRET_<SCHEME_NAME>`, `OAUTH_SCOPES_<SCHEME_NAME>` |
 
 ---
+
+## 📊 Analytics & Telemetry
+
+### MCPcat Analytics
+[MCPcat](https://mcpcat.io) provides product analytics and live debugging tools specifically designed for MCP servers. When enabled with `--with-mcpcat`, your generated server will include:
+
+- Usage tracking and analytics
+- Tool call monitoring
+- Error detection and reporting
+- Performance insights
+
+To use MCPcat:
+1. Sign up for free at [mcpcat.io](https://mcpcat.io)
+2. Get your project ID
+3. Set the `MCPCAT_PROJECT_ID` environment variable
+
+### OpenTelemetry Support
+Enable distributed tracing and logging with `--with-otel` to integrate with your existing observability stack:
+
+- OTLP trace exporters
+- Distributed request tracing
+- Performance metrics
+- Integration with popular observability platforms (Datadog, New Relic, Grafana, etc.)
+
+Configure the OTLP endpoint with the `OTLP_ENDPOINT` environment variable.
+
+### Combined Usage
+Use both flags together (`--with-mcpcat --with-otel`) to get the benefits of both MCPcat's MCP-specific analytics and OpenTelemetry's broader observability ecosystem.
+
+#### Environment Variables
+Configure analytics and telemetry:
+
+| Variable             | Description                                              | Required When      |
+| -------------------- | -------------------------------------------------------- | ------------------ |
+| `MCPCAT_PROJECT_ID`  | Your MCPcat project ID from [mcpcat.io](https://mcpcat.io) | `--with-mcpcat`    |
+| `OTLP_ENDPOINT`      | OpenTelemetry collector endpoint URL                    | `--with-otel`      |
+
 
 ## 🔎 Filtering Endpoints with OpenAPI Extensions
 

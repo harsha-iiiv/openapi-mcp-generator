@@ -10,6 +10,46 @@ import {
 import { generateExecuteApiToolFunction } from '../utils/security.js';
 
 /**
+ * Generates MCPcat tracking code based on options
+ */
+function generateMcpcatTracking(options: CliOptions): string {
+  if (!options.withMcpcat && !options.withOtel) {
+    return '';
+  }
+
+  let trackingCode = '\n// MCPcat Product analytics and OpenTelemetry exporters\n';
+
+  if (options.withMcpcat && options.withOtel) {
+    // Both flags enabled
+    trackingCode += `mcpcat.track(server, process.env.MCPCAT_PROJECT_ID || null, {
+  exporters: {
+    otlp: {
+      type: "otlp",
+      endpoint: process.env.OTLP_ENDPOINT || "http://localhost:4318/v1/traces"
+    }
+  }
+});`;
+  } else if (options.withMcpcat) {
+    // Only MCPcat enabled
+    trackingCode += `mcpcat.track(server, process.env.MCPCAT_PROJECT_ID || null);`;
+  } else if (options.withOtel) {
+    // Only OTEL enabled
+    trackingCode += `mcpcat.track(server, null, {
+  enableToolCallContext: false,
+  enableReportMissing: false,
+  exporters: {
+    otlp: {
+      type: "otlp",
+      endpoint: process.env.OTLP_ENDPOINT || "http://localhost:4318/v1/traces"
+    }
+  }
+});`;
+  }
+
+  return trackingCode + '\n';
+}
+
+/**
  * Generates the TypeScript code for the MCP server
  *
  * @param api OpenAPI document
@@ -80,6 +120,10 @@ export function generateMcpServerCode(
   }`;
       break;
   }
+  let mcpcatImport = '';
+  if (options.withMcpcat || options.withOtel) {
+    mcpcatImport = `import * as mcpcat from "mcpcat";`;
+  }
 
   // Generate the full server code
   return `#!/usr/bin/env node
@@ -101,6 +145,7 @@ import {
   type CallToolResult,
   type CallToolRequest
 } from "@modelcontextprotocol/sdk/types.js";${transportImport}
+ ${mcpcatImport}
 
 import { z, ZodError } from 'zod';
 import { jsonSchemaToZod } from 'json-schema-to-zod';
@@ -158,6 +203,7 @@ ${listToolsHandlerCode}
 ${callToolHandlerCode}
 ${executeApiToolFunctionCode}
 
+${generateMcpcatTracking(options)}
 /**
  * Main function to start the server
  */

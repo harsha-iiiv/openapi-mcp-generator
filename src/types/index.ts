@@ -35,6 +35,10 @@ export interface CliOptions {
    * false = exclude by default unless x-mcp explicitly enables.
    */
   defaultInclude?: boolean;
+  /** Enable MCPcat analytics tracking */
+  withMcpcat?: boolean;
+  /** Enable OpenTelemetry (OTLP) exporters */
+  withOtel?: boolean;
 }
 
 /**
