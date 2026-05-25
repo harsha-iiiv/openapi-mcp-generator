@@ -70,8 +70,8 @@ export function generateHttpSecurityCode(): string {
         else if (scheme.scheme?.toLowerCase() === 'basic') {
             const username = process.env[\`${getEnvVarName(schemeName, 'BASIC_USERNAME')}\`];
             const password = process.env[\`${getEnvVarName(schemeName, 'BASIC_PASSWORD')}\`];
-            if (username && password) {
-                headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
+            if (username != null) {
+                headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password ?? ''}\`).toString('base64')}\`;
             }
         }
     }`;
@@ -227,8 +227,7 @@ export function generateExecuteApiToolFunction(
                     return !!process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
                 }
                 else if (scheme.scheme?.toLowerCase() === 'basic') {
-                    return !!process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] && 
-                           !!process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                    return process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] != null;
                 }
             }
             
@@ -297,8 +296,8 @@ export function generateExecuteApiToolFunction(
                 else if (scheme.scheme?.toLowerCase() === 'basic') {
                     const username = process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
                     const password = process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                    if (username && password) {
-                        headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
+                    if (username != null) {
+                        headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password ?? ''}\`).toString('base64')}\`;
                         console.error(\`Applied Basic authentication for '\${schemeName}'\`);
                     }
                 }
