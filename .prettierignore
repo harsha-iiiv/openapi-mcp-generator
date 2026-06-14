@@ -1,0 +1,19 @@
+# Build output
+dist/
+build/
+
+# Dependencies
+node_modules/
+
+# Generated and example MCP server projects (not source of this package)
+examples/
+generated/
+
+# Test fixtures are vendored / real-world specs — keep them verbatim
+tests/fixtures/
+
+# Lockfiles
+package-lock.json
+
+# CI / repo metadata
+.github/

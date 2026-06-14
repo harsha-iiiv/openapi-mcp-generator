@@ -36,6 +36,7 @@ generator functions, and hardens the template emitters. Public API signatures
 ## Workstream 1 — Security (default-on, no flag needed)
 
 ### #67 — Template-literal injection via OpenAPI description
+
 `sanitizeForTemplate()` escapes backticks and backslashes but not `${`. A
 malicious `description` like `${process.env}` is written verbatim into a
 backtick template literal in generated `index.ts` and evaluated at startup.
@@ -45,6 +46,7 @@ backtick template literal in generated `index.ts` and evaluated at startup.
 backticks, then `${`. Add unit test with a malicious description.
 
 ### #68 — SSRF via uncontrolled external `$ref`
+
 `SwaggerParser.dereference()` resolves `http(s)://` refs with live requests, no
 allow-list. Exploitable in CI and on cloud VMs (metadata endpoints).
 
@@ -57,12 +59,14 @@ rather than emitting requests. Local file refs still resolve. Document the flag.
 ## Workstream 2 — Bug fixes (default-on)
 
 ### #65 — `npm run build` fails on generated server
+
 `response.headers['content-type']?.toLowerCase()` — header value is typed
 `string | number | ... | AxiosHeaders`; `.toLowerCase()` doesn't exist on it.
 
 **Fix:** in generated `executeApiTool`, coerce: `String(response.headers['content-type'] ?? '').toLowerCase()`.
 
 ### #56 — OAuth `SCHEMENAME` not replaced
+
 `acquireOAuth2Token` reads literal `process.env['OAUTH_CLIENT_ID_SCHEMENAME']`
 because `getEnvVarName('schemeName', ...)` is called at generation time with the
 literal placeholder string. At runtime the function receives the real
@@ -74,12 +78,14 @@ literal placeholder string. At runtime the function receives the real
 — mirroring the pattern already used in `generateExecuteApiToolFunction`.
 
 ### #66 — Basic auth fails when password is empty
+
 `if (username && password)` treats an empty password (valid per RFC 7617, e.g.
 Dropbox Sign) as missing. Fix all three sites: availability check, applied-auth
 code, and `generateHttpSecurityCode()`. Use `if (username != null)` and
 `password ?? ''`. (Adopts PR #66.)
 
 ### #41 — Array query params serialized incorrectly
+
 axios defaults to `fields[]=a&fields[]=b`; many APIs want `fields=a,b`.
 
 **Fix:** add a `paramsSerializer` to the generated axios config that joins array
@@ -89,6 +95,7 @@ so it is safe-by-default. (Adopts PR #41 intent.)
 ## Workstream 3 — Non-breaking features (opt-in / metadata)
 
 ### #4 — Tool names over 64 chars (Claude Desktop limit)
+
 **Flag:** `--max-tool-name-length <n>` (default **64**). In
 `extractToolsFromApi`, after sanitizing, if `name.length > max`, truncate to
 `max` chars; on truncation/collision append a short deterministic hash suffix
@@ -96,31 +103,37 @@ within the limit. Uniqueness set already exists. Default 64 changes output only
 for specs that were already broken in Claude Desktop.
 
 ### #55 — Per-request API key via MCP headers (web / streamable-http)
+
 **Flag:** `--header-passthrough <comma-separated-names>`. Generated web /
 streamable-http transports capture the listed inbound HTTP headers and forward
 them onto the upstream API request, overriding env-based auth for those headers.
 Stdio transport unaffected (no inbound headers). Documented in README + .env.
 
 ### #48 — Base URL via env var
+
 Already implemented (`process.env.API_BASE_URL || "<determined>"`). Work:
 surface `API_BASE_URL` in `.env.example` and README so users discover it.
 
 ### #59 — OpenAPI tags in tool interface
+
 Extract `operation.tags` into `McpToolDefinition.tags`. Emit into the tool
 definition map and append `(Tags: a, b)` to the tool description for
 filtering/grouping. Metadata-only, default on. (Adopts PR #59.)
 
 ### #49 — Expose `deprecated` attribute
+
 Extract `operation.deprecated` (default `false`) into
 `McpToolDefinition.deprecated`, emit into tool map, and prefix description with
 a `[DEPRECATED]` marker. Metadata-only, default on. (Adopts PR #49.)
 
 ### #46 — Allow insecure HTTPS (self-signed certs)
+
 **Flag:** `--insecure` / `-k` (default false). When set, generated axios
 requests (incl. OAuth token acquisition) use an `https.Agent({ rejectUnauthorized:
 false })`. Off by default — TLS verification unchanged. (Adopts PR #46.)
 
 ### #50 — PORT env fallback + library mode
+
 - Generated transports resolve port as `options.port ?? process.env.PORT ?? 3000`.
 - **Flag:** `--generate-lib` exports `main()` and omits the auto-invoke +
   signal-handler/cleanup block, so the entry can be imported as a library.
@@ -129,6 +142,7 @@ false })`. Off by default — TLS verification unchanged. (Adopts PR #46.)
 ## Workstream 4 — Larger opt-in features
 
 ### #9 — Customizable auth interface
+
 **Flag:** `--custom-auth`. Generates `src/auth.ts` exporting
 `export async function applyCustomAuth(ctx: { headers, queryParams, toolName, definition }): Promise<boolean>`.
 The generated `executeApiTool` calls it before built-in auth; returning `true`
@@ -136,6 +150,7 @@ short-circuits built-in auth application. The file is a user-editable stub with
 a no-op default. Off by default.
 
 ### #8 — OAuth client creds in request body
+
 **Flag:** `--oauth-creds-in-body`. Generated `acquireOAuth2Token` sends
 `client_id` / `client_secret` in the `application/x-www-form-urlencoded` body
 instead of the Basic `Authorization` header. Off by default (header remains the
@@ -146,31 +161,32 @@ default per current behavior). (Adopts issue #8 / PRs #7, #13 intent.)
 ```ts
 interface CliOptions {
   // ...existing...
-  allowExternalRefs?: boolean;     // #68
-  maxToolNameLength?: number;      // #4  (default 64)
-  headerPassthrough?: string[];    // #55
-  insecure?: boolean;              // #46
-  generateLib?: boolean;           // #50
-  customAuth?: boolean;            // #9
-  oauthCredsInBody?: boolean;      // #8
+  allowExternalRefs?: boolean; // #68
+  maxToolNameLength?: number; // #4  (default 64)
+  headerPassthrough?: string[]; // #55
+  insecure?: boolean; // #46
+  generateLib?: boolean; // #50
+  customAuth?: boolean; // #9
+  oauthCredsInBody?: boolean; // #8
 }
 
 interface McpToolDefinition {
   // ...existing...
-  tags?: string[];                 // #59
-  deprecated?: boolean;            // #49
+  tags?: string[]; // #59
+  deprecated?: boolean; // #49
 }
 
 interface GetToolsOptions {
   // ...existing...
-  allowExternalRefs?: boolean;     // #68
-  maxToolNameLength?: number;      // #4
+  allowExternalRefs?: boolean; // #68
+  maxToolNameLength?: number; // #4
 }
 ```
 
 ## Testing
 
 Unit tests (Jest) per fix:
+
 - `sanitizeForTemplate` escapes `${`, backticks, backslashes (#67)
 - external-ref spec is rejected when `allowExternalRefs` is false (#68)
 - OAuth env var names derive from runtime scheme name (#56)
