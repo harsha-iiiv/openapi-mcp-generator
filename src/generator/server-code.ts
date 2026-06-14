@@ -96,7 +96,10 @@ main().catch((error) => {
   // Port resolution order: explicit --port, then PORT env var, then 3000 (issue #50).
   let transportImport = '';
   let transportCode = '';
-  const portExpr = options.port ? `${options.port}` : `Number(process.env.PORT) || 3000`;
+  // Treat an explicit --port (including 0, "let the OS pick") as set; only fall
+  // back to PORT/3000 when no port was provided (issue #50).
+  const portExpr =
+    options.port !== undefined ? `${options.port}` : `Number(process.env.PORT) || 3000`;
 
   switch (options.transport) {
     case 'web':

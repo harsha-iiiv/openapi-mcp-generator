@@ -170,6 +170,14 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
   // StreamableHTTP files (if requested)
   const streamableHttpPath = path.join(srcDir, 'streamable-http.ts');
 
+  // Track whether the output directory already existed so the error handler can
+  // avoid deleting a pre-existing project (and any preserved files such as
+  // src/auth.ts) when --force is used and a later write fails.
+  const outputDirPreexisted = await fs
+    .stat(outputDir)
+    .then(() => true)
+    .catch(() => false);
+
   try {
     // Check if output directory exists and is not empty
     if (!options.force) {
@@ -292,7 +300,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       console.error('Generating web server files...');
 
       // Generate web server code
-      const webServerCode = generateWebServerCode(options.port || 3000, enableHeaderPassthrough);
+      const webServerCode = generateWebServerCode(options.port ?? 3000, enableHeaderPassthrough);
       await fs.writeFile(webServerPath, webServerCode);
       console.error(` -> Created ${webServerPath}`);
 
@@ -311,7 +319,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
 
       // Generate StreamableHTTP server code
       const streamableHttpCode = generateStreamableHttpCode(
-        options.port || 3000,
+        options.port ?? 3000,
         enableHeaderPassthrough
       );
       await fs.writeFile(streamableHttpPath, streamableHttpCode);
@@ -335,13 +343,13 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     if (options.transport === 'web') {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server in web mode: npm run start:web`);
-      console.error(`   (This will start a web server on port ${options.port || 3000})`);
-      console.error(`   Access the test client at: http://localhost:${options.port || 3000}`);
+      console.error(`   (This will start a web server on port ${options.port ?? 3000})`);
+      console.error(`   Access the test client at: http://localhost:${options.port ?? 3000}`);
     } else if (options.transport === 'streamable-http') {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server in StreamableHTTP mode: npm run start:http`);
-      console.error(`   (This will start a StreamableHTTP server on port ${options.port || 3000})`);
-      console.error(`   Access the test client at: http://localhost:${options.port || 3000}`);
+      console.error(`   (This will start a StreamableHTTP server on port ${options.port ?? 3000})`);
+      console.error(`   Access the test client at: http://localhost:${options.port ?? 3000}`);
     } else {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server: npm start`);
@@ -351,14 +359,20 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
   } catch (error) {
     console.error('\nError generating MCP server project:', error);
 
-    // Only attempt cleanup if the directory exists and force option was used
-    if (options.force) {
+    // Only clean up directories we created this run. If the output directory
+    // already existed, removing it could destroy a pre-existing project
+    // (including a preserved src/auth.ts), so leave it in place.
+    if (options.force && !outputDirPreexisted) {
       try {
         await fs.rm(outputDir, { recursive: true, force: true });
         console.error(`Cleaned up partially created directory: ${outputDir}`);
       } catch (cleanupError) {
         console.error(`Failed to cleanup directory ${outputDir}:`, cleanupError);
       }
+    } else if (options.force && outputDirPreexisted) {
+      console.error(
+        `Left existing directory ${outputDir} in place (it predated this run); some files may be partially written.`
+      );
     }
 
     process.exit(1);

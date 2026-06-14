@@ -78,6 +78,36 @@ describe('#68 external $ref SSRF guard', () => {
     expect(() => assertNoExternalRefs(spec)).not.toThrow();
   });
 
+  it('does not treat a $ref string in example/data as an OpenAPI reference', () => {
+    // A `$ref` that is user data (example payload, or a data object with extra
+    // sibling props) must NOT be rejected — only true Reference Objects are.
+    const spec = {
+      openapi: '3.0.0',
+      paths: {
+        '/x': {
+          post: {
+            requestBody: {
+              content: {
+                'application/json': {
+                  // An example payload that happens to contain a $ref-shaped string.
+                  example: { $ref: 'http://example.com/some-user-data', other: 1 },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    expect(() => assertNoExternalRefs(spec)).not.toThrow();
+  });
+
+  it('still rejects a real external Reference Object alongside summary/description', () => {
+    const spec = {
+      schema: { $ref: 'https://evil.test/x.json', summary: 's', description: 'd' },
+    };
+    expect(() => assertNoExternalRefs(spec)).toThrow(ExternalRefError);
+  });
+
   it('handles cyclic objects without infinite recursion', () => {
     const a: any = { name: 'a' };
     a.self = a;

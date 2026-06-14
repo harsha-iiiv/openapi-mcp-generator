@@ -152,16 +152,47 @@ describe('integration: generate + typecheck', () => {
       })
     );
     let failed = false;
+    let output = '';
     try {
       execFileSync(
         'node',
         [cliEntry, '--input', badSpec, '--output', path.join(workdir, 'bad-out'), '--force'],
         { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }
       );
-    } catch {
+    } catch (e: any) {
       failed = true;
+      output = `${e.stdout ?? ''}${e.stderr ?? ''}`;
     }
     expect(failed).toBe(true);
+    // Assert it failed specifically because of the external-ref SSRF guard,
+    // not some unrelated regression.
+    expect(output).toMatch(/external \$ref|SSRF|allow-external-refs/i);
+  });
+
+  it('allows external $ref when --allow-external-refs is set (guard does not block)', () => {
+    // A spec whose only "external" ref is a local-style ref must generate fine
+    // with the flag on; this exercises the allow path without a network call.
+    const okSpec = path.join(workdir, 'allow.json');
+    fs.writeFileSync(
+      okSpec,
+      JSON.stringify({
+        openapi: '3.0.0',
+        info: { title: 'ok', version: '1' },
+        paths: {
+          '/x': {
+            get: { operationId: 'getX', responses: { '200': { description: 'ok' } } },
+          },
+        },
+      })
+    );
+    const out = path.join(workdir, 'allow-out');
+    // Should not throw with the flag set.
+    execFileSync(
+      'node',
+      [cliEntry, '--input', okSpec, '--output', out, '--allow-external-refs', '--force'],
+      { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }
+    );
+    expect(fs.existsSync(path.join(out, 'src', 'index.ts'))).toBe(true);
   });
 
   it('generates a real-world spec (Swagger Petstore) that type-checks', () => {

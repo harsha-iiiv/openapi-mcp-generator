@@ -33,6 +33,24 @@ export function isExternalHttpRef(ref: unknown): ref is string {
  *
  * This runs before dereferencing so no outbound request is ever made.
  */
+/**
+ * Keys whose values are literal user data (example payloads, defaults), where a
+ * string property named `$ref` is content — not an OpenAPI reference. We don't
+ * scan into these to avoid false positives on otherwise-valid specs.
+ */
+const DATA_BEARING_KEYS = new Set(['example', 'examples', 'default']);
+
+/**
+ * An OpenAPI Reference Object is `{ $ref: string }`, optionally accompanied by
+ * `summary`/`description` (OpenAPI 3.1). If an object carries a `$ref` string
+ * alongside other arbitrary properties, it's user data (e.g. an example body),
+ * not a reference SwaggerParser would resolve.
+ */
+function isReferenceObject(obj: Record<string, unknown>): boolean {
+  if (typeof obj.$ref !== 'string') return false;
+  return Object.keys(obj).every((k) => k === '$ref' || k === 'summary' || k === 'description');
+}
+
 export function assertNoExternalRefs(node: unknown, seen: WeakSet<object> = new WeakSet()): void {
   if (node === null || typeof node !== 'object') return;
   if (seen.has(node as object)) return;
@@ -43,10 +61,16 @@ export function assertNoExternalRefs(node: unknown, seen: WeakSet<object> = new 
     return;
   }
 
-  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-    if (key === '$ref' && isExternalHttpRef(value)) {
-      throw new ExternalRefError(value);
-    }
+  const obj = node as Record<string, unknown>;
+
+  // Only treat a structurally-valid Reference Object's $ref as a resolvable ref.
+  if (isReferenceObject(obj) && isExternalHttpRef(obj.$ref)) {
+    throw new ExternalRefError(obj.$ref as string);
+  }
+
+  for (const [key, value] of Object.entries(obj)) {
+    // Skip literal-data subtrees where `$ref` would be content, not a reference.
+    if (DATA_BEARING_KEYS.has(key)) continue;
     assertNoExternalRefs(value, seen);
   }
 }

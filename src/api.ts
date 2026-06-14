@@ -62,11 +62,16 @@ export async function getToolsFromOpenApi(
     // Resolve local/internal refs only when external refs are disallowed.
     const resolverOptions = allowExternalRefs ? {} : { resolve: { http: false as const } };
 
-    // Parse the OpenAPI spec
-    const api = isOpenApiDocument(specPathOrUrl)
-      ? specPathOrUrl
-      : options.dereference
-        ? ((await SwaggerParser.dereference(specPathOrUrl, resolverOptions)) as OpenAPIV3.Document)
+    // Parse the OpenAPI spec.
+    // Honor `dereference` for all input types, including a pre-parsed document
+    // (SwaggerParser accepts an API object as well as a path/URL string).
+    const api = options.dereference
+      ? ((await SwaggerParser.dereference(
+          specPathOrUrl as string,
+          resolverOptions
+        )) as OpenAPIV3.Document)
+      : isOpenApiDocument(specPathOrUrl)
+        ? specPathOrUrl
         : ((await SwaggerParser.parse(specPathOrUrl, resolverOptions)) as OpenAPIV3.Document);
 
     // Guard against SSRF via external $ref unless explicitly allowed.
