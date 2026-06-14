@@ -35,6 +35,42 @@ export interface CliOptions {
    * false = exclude by default unless x-mcp explicitly enables.
    */
   defaultInclude?: boolean;
+  /**
+   * Allow resolution of external (http/https) `$ref` references in the spec.
+   * Default false: external refs are rejected to prevent SSRF during parsing.
+   */
+  allowExternalRefs?: boolean;
+  /**
+   * Maximum length for generated tool names (Claude Desktop limits to 64).
+   * Names longer than this are truncated with a deterministic hash suffix.
+   * Default 64.
+   */
+  maxToolNameLength?: number;
+  /**
+   * Inbound HTTP header names (web/streamable-http transports) to forward
+   * onto the upstream API request, overriding env-based auth for those headers.
+   */
+  headerPassthrough?: string[];
+  /**
+   * Allow insecure HTTPS connections (skip TLS certificate verification) in the
+   * generated server. Default false.
+   */
+  insecure?: boolean;
+  /**
+   * Generate library-style output: export `main()` instead of auto-invoking it,
+   * and omit signal-handler/cleanup wiring. Default false.
+   */
+  generateLib?: boolean;
+  /**
+   * Generate an editable `src/auth.ts` custom auth hook invoked before built-in
+   * auth in the generated server. Default false.
+   */
+  customAuth?: boolean;
+  /**
+   * Send OAuth2 client credentials in the token request body instead of the
+   * Basic Authorization header. Default false.
+   */
+  oauthCredsInBody?: boolean;
 }
 
 /**
@@ -62,6 +98,10 @@ export interface McpToolDefinition {
   securityRequirements: OpenAPIV3.SecurityRequirementObject[];
   /** Original operation ID from the OpenAPI spec */
   operationId: string;
+  /** OpenAPI tags associated with this operation, if any */
+  tags?: string[];
+  /** Whether the operation is marked deprecated in the OpenAPI spec */
+  deprecated?: boolean;
 }
 
 /**

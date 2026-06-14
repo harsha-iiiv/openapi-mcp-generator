@@ -70,19 +70,61 @@ export function generateHttpSecurityCode(): string {
         else if (scheme.scheme?.toLowerCase() === 'basic') {
             const username = process.env[\`${getEnvVarName(schemeName, 'BASIC_USERNAME')}\`];
             const password = process.env[\`${getEnvVarName(schemeName, 'BASIC_PASSWORD')}\`];
-            if (username && password) {
-                headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
+            // Empty password is valid per RFC 7617 (issue #66); only username is required.
+            if (username != null) {
+                headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password ?? ''}\`).toString('base64')}\`;
             }
         }
     }`;
 }
 
 /**
- * Generates code for OAuth2 token acquisition
+ * Options controlling generated security/execution code.
+ */
+export interface SecurityCodeOptions {
+  /** Skip TLS verification for generated requests (issue #46). */
+  insecure?: boolean;
+  /** Send OAuth2 client credentials in the request body, not Basic header (issue #8). */
+  oauthCredsInBody?: boolean;
+  /** Inbound header names to forward to the upstream API (issue #55). */
+  headerPassthrough?: string[];
+  /** Generate and invoke a custom auth hook before built-in auth (issue #9). */
+  customAuth?: boolean;
+}
+
+/**
+ * Generates code for OAuth2 token acquisition.
  *
+ * The env-var lookups are computed from the *runtime* `schemeName` argument
+ * (not a literal placeholder) so per-scheme credentials resolve correctly
+ * (issue #56).
+ *
+ * @param options Generation options affecting the emitted code
  * @returns Generated code for OAuth2 token acquisition
  */
-export function generateOAuth2TokenAcquisitionCode(): string {
+export function generateOAuth2TokenAcquisitionCode(options: SecurityCodeOptions = {}): string {
+  // Runtime env-var expression for a given credential prefix.
+  const env = (prefix: string) =>
+    `process.env[\`${prefix}_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`]`;
+
+  // Token request: credentials in body (issue #8) or Basic header (default).
+  const bodyCreds = options.oauthCredsInBody
+    ? `
+        // Send client credentials in the request body
+        formData.append('client_id', clientId);
+        formData.append('client_secret', clientSecret);`
+    : '';
+  const tokenRequestHeaders = options.oauthCredsInBody
+    ? `'Content-Type': 'application/x-www-form-urlencoded'`
+    : `'Content-Type': 'application/x-www-form-urlencoded',
+                'Authorization': \`Basic \${Buffer.from(\`\${clientId}:\${clientSecret}\`).toString('base64')}\``;
+
+  // Insecure HTTPS agent (issue #46).
+  const insecureAgent = options.insecure
+    ? `,
+            httpsAgent: insecureHttpsAgent`
+    : '';
+
   return `
 /**
  * Type definition for cached OAuth tokens
@@ -108,11 +150,11 @@ declare global {
  */
 async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<string | null | undefined> {
     try {
-        // Check if we have the necessary credentials
-        const clientId = process.env[\`${getEnvVarName('schemeName', 'OAUTH_CLIENT_ID')}\`];
-        const clientSecret = process.env[\`${getEnvVarName('schemeName', 'OAUTH_CLIENT_SECRET')}\`];
-        const scopes = process.env[\`${getEnvVarName('schemeName', 'OAUTH_SCOPES')}\`];
-        
+        // Check if we have the necessary credentials (resolved per-scheme at runtime)
+        const clientId = ${env('OAUTH_CLIENT_ID')};
+        const clientSecret = ${env('OAUTH_CLIENT_SECRET')};
+        const scopes = ${env('OAUTH_SCOPES')};
+
         if (!clientId || !clientSecret) {
             console.error(\`Missing client credentials for OAuth2 scheme '\${schemeName}'\`);
             return null;
@@ -153,19 +195,18 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         // Add scopes if specified
         if (scopes) {
             formData.append('scope', scopes);
-        }
-        
+        }${bodyCreds}
+
         console.error(\`Requesting OAuth2 token from \${tokenUrl}\`);
-        
+
         // Make the token request
         const response = await axios({
             method: 'POST',
             url: tokenUrl,
             headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Authorization': \`Basic \${Buffer.from(\`\${clientId}:\${clientSecret}\`).toString('base64')}\`
+                ${tokenRequestHeaders}
             },
-            data: formData.toString()
+            data: formData.toString()${insecureAgent}
         });
         
         // Process the response
@@ -195,16 +236,118 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
 }
 
 /**
+ * Returns the top-of-module import statements the generated security/execution
+ * code requires, given the active options. These must be emitted at the top of
+ * the generated module (ES module imports cannot appear mid-file).
+ *
+ * @param options Generation options
+ * @returns Import statements (possibly empty), newline-terminated
+ */
+export function getSecurityModuleImports(options: SecurityCodeOptions = {}): string {
+  let imports = '';
+  if (options.insecure) {
+    imports += `import * as https from 'https';\n`;
+  }
+  if (options.customAuth) {
+    imports += `import { applyCustomAuth } from './auth.js';\n`;
+  }
+  if (
+    Array.isArray(options.headerPassthrough) &&
+    options.headerPassthrough.filter(Boolean).length
+  ) {
+    imports += `import { AsyncLocalStorage } from 'async_hooks';\n`;
+  }
+  return imports;
+}
+
+/**
+ * Declaration for the request-scoped inbound-header store used by header
+ * passthrough (issue #55). Exported so the web/streamable-http transports can
+ * run each request inside `inboundHeaderStore.run(headers, ...)`, giving
+ * concurrency-safe, per-request header forwarding (no shared global state).
+ *
+ * @param options Generation options
+ * @returns Declaration source (empty unless header passthrough is enabled)
+ */
+export function getInboundHeaderStoreDeclaration(options: SecurityCodeOptions = {}): string {
+  const enabled =
+    Array.isArray(options.headerPassthrough) &&
+    options.headerPassthrough.filter(Boolean).length > 0;
+  if (!enabled) return '';
+  return `
+/**
+ * Request-scoped storage for inbound headers eligible for passthrough.
+ * The transports populate this per request; executeApiTool reads it.
+ */
+export const inboundHeaderStore = new AsyncLocalStorage<Record<string, string>>();
+`;
+}
+
+/**
  * Generates code for executing API tools with security handling
  *
  * @param securitySchemes Security schemes from OpenAPI spec
+ * @param options Generation options affecting the emitted code
  * @returns Generated code for the execute API tool function
  */
 export function generateExecuteApiToolFunction(
-  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes']
+  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes'],
+  options: SecurityCodeOptions = {}
 ): string {
   // Generate OAuth2 token acquisition function
-  const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode();
+  const oauth2TokenAcquisitionCode = generateOAuth2TokenAcquisitionCode(options);
+
+  // Insecure HTTPS agent declaration (issue #46), shared by token + tool requests.
+  // Note: the `https` import is emitted at the top of the generated module by
+  // getSecurityModuleImports(); this only declares the shared agent constant.
+  const insecurePreamble = options.insecure
+    ? `
+/** Shared HTTPS agent that skips TLS verification (enabled via --insecure). */
+const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
+`
+    : '';
+
+  // Insecure agent applied to the per-tool axios request config (issue #46).
+  const insecureAgentToolConfig = options.insecure ? `\n      httpsAgent: insecureHttpsAgent,` : '';
+
+  // Custom auth hook invocation (issue #9). When the hook returns true, the
+  // built-in auth block below is skipped (guarded by !customAuthHandled).
+  const customAuthCall = options.customAuth
+    ? `
+    // Custom auth hook (see src/auth.ts). Returning true short-circuits built-in auth.
+    const customAuthHandled = await applyCustomAuth({ headers, queryParams, toolName, definition });
+    if (customAuthHandled) {
+        console.error(\`Custom auth applied for tool '\${toolName}', skipping built-in auth.\`);
+    }
+`
+    : '';
+  // Built-in auth is wrapped in this guard so a custom hook can fully own auth.
+  const builtinAuthGuardOpen = options.customAuth ? '    if (!customAuthHandled) {\n' : '';
+  const builtinAuthGuardClose = options.customAuth ? '\n    }' : '';
+
+  // Header passthrough (issue #55): forward selected inbound headers to the
+  // upstream API. Headers are read from request-scoped AsyncLocalStorage (set
+  // by the web/streamable-http transports), NOT a shared global, so concurrent
+  // requests cannot leak each other's credentials. No-op for stdio.
+  const headerPassthroughNames = Array.isArray(options.headerPassthrough)
+    ? options.headerPassthrough.filter(Boolean)
+    : [];
+  const headerPassthroughCode =
+    headerPassthroughNames.length > 0
+      ? `
+    // Forward configured inbound headers to the upstream API (issue #55)
+    const __passthroughHeaderNames = ${JSON.stringify(headerPassthroughNames.map((h) => h.toLowerCase()))};
+    const __inboundHeaders = inboundHeaderStore.getStore();
+    if (__inboundHeaders) {
+        for (const __name of __passthroughHeaderNames) {
+            const __val = __inboundHeaders[__name];
+            if (typeof __val !== 'undefined') {
+                headers[__name] = __val;
+            }
+        }
+    }
+`
+      : '';
 
   // Generate security handling code for checking, applying security
   const securityCode = `
@@ -227,8 +370,8 @@ export function generateExecuteApiToolFunction(
                     return !!process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
                 }
                 else if (scheme.scheme?.toLowerCase() === 'basic') {
-                    return !!process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] && 
-                           !!process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+                    // Username is sufficient; an empty password is valid per RFC 7617 (issue #66)
+                    return process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] != null;
                 }
             }
             
@@ -297,8 +440,9 @@ export function generateExecuteApiToolFunction(
                 else if (scheme.scheme?.toLowerCase() === 'basic') {
                     const username = process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
                     const password = process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                    if (username && password) {
-                        headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
+                    // Empty password is valid per RFC 7617 (issue #66); only username is required.
+                    if (username != null) {
+                        headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password ?? ''}\`).toString('base64')}\`;
                         console.error(\`Applied Basic authentication for '\${schemeName}'\`);
                     }
                 }
@@ -364,7 +508,7 @@ export function generateExecuteApiToolFunction(
 
   // Generate complete execute API tool function
   return `
-${oauth2TokenAcquisitionCode}
+${insecurePreamble}${oauth2TokenAcquisitionCode}
 
 /**
  * Executes an API tool with the provided arguments
@@ -433,27 +577,36 @@ async function executeApiTool(
         requestBodyData = validatedArgs['requestBody'];
         headers['content-type'] = definition.requestBodyContentType;
     }
-
-${securityCode}
-
+${customAuthCall}${builtinAuthGuardOpen}${securityCode}${builtinAuthGuardClose}
+${headerPassthroughCode}
     // Prepare the axios request configuration
     const config: AxiosRequestConfig = {
-      method: definition.method.toUpperCase(), 
-      url: requestUrl, 
-      params: queryParams, 
+      method: definition.method.toUpperCase(),
+      url: requestUrl,
+      params: queryParams,
       headers: headers,
+      // Serialize array query params as comma-separated values (issue #41)
+      paramsSerializer: (params: Record<string, any>) => {
+        const search = new URLSearchParams();
+        for (const [key, value] of Object.entries(params)) {
+          if (value === undefined || value === null) continue;
+          search.append(key, Array.isArray(value) ? value.join(',') : String(value));
+        }
+        return search.toString();
+      },${insecureAgentToolConfig}
       ...(requestBodyData !== undefined && { data: requestBodyData }),
     };
 
     // Log request info to stderr (doesn't affect MCP output)
     console.error(\`Executing tool "\${toolName}": \${config.method} \${config.url}\`);
-    
+
     // Execute the request
     const response = await axios(config);
 
     // Process and format the response
     let responseText = '';
-    const contentType = response.headers['content-type']?.toLowerCase() || '';
+    // Coerce header value to string before lowercasing (issue #65)
+    const contentType = String(response.headers['content-type'] ?? '').toLowerCase();
     
     // Handle JSON responses
     if (contentType.includes('application/json') && typeof response.data === 'object' && response.data !== null) {

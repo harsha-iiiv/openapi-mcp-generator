@@ -1,0 +1,73 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Sample API", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.example.com/v1" }],
+  "components": {
+    "securitySchemes": {
+      "myOAuth": {
+        "type": "oauth2",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://api.example.com/oauth/token",
+            "scopes": { "read": "read access" }
+          }
+        }
+      },
+      "myBasic": { "type": "http", "scheme": "basic" },
+      "myApiKey": { "type": "apiKey", "in": "header", "name": "X-API-Key" }
+    }
+  },
+  "paths": {
+    "/items/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Path-item-level id",
+          "schema": { "type": "string" }
+        }
+      ],
+      "get": {
+        "operationId": "getItemById",
+        "summary": "Get an item",
+        "tags": ["items"],
+        "security": [{ "myBasic": [] }],
+        "parameters": [
+          {
+            "name": "fields",
+            "in": "query",
+            "schema": { "type": "array", "items": { "type": "string" } }
+          }
+        ],
+        "responses": { "200": { "description": "ok" } }
+      }
+    },
+    "/items": {
+      "get": {
+        "operationId": "listItems",
+        "description": "List items ${not_injected}",
+        "deprecated": true,
+        "tags": ["items", "public"],
+        "security": [{ "myOAuth": ["read"] }],
+        "responses": { "200": { "description": "ok" } }
+      },
+      "post": {
+        "operationId": "createItem",
+        "security": [{ "myApiKey": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": { "name": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "created" } }
+      }
+    }
+  }
+}

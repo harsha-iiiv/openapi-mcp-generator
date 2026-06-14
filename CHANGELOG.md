@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-06-13
+
+A hardening-and-configurability release. All changes are backward compatible:
+new behaviors are opt-in via CLI flags / env vars, or are additive metadata.
+Defaults preserve previous output except where the prior behavior was a
+security hole or a build-breaking bug.
+
+### Security
+
+- **Prevent template-literal injection** from OpenAPI `description`/`summary`
+  fields. `sanitizeForTemplate()` now escapes `${` sequences in addition to
+  backticks and backslashes, so a malicious spec can no longer inject code that
+  executes at generated-server startup. (#67)
+- **SSRF protection for external `$ref` resolution.** External `http(s)` `$ref`
+  references are now rejected by default during parsing (which previously issued
+  live outbound requests). Use `--allow-external-refs` (CLI) or
+  `allowExternalRefs: true` (`getToolsFromOpenApi`) to opt back in. (#68)
+
+### Fixed
+
+- Generated server no longer fails `npm run build` with a `toLowerCase` type
+  error on `content-type`; the header value is coerced to a string first. (#65)
+- OAuth2 client-credentials env vars now resolve from the runtime scheme name
+  (e.g. `OAUTH_CLIENT_ID_MYSCHEME`) instead of the literal `SCHEMENAME`. (#56)
+- HTTP Basic auth now works when the password is empty (valid per RFC 7617);
+  only a username is required. (#66)
+- Array-valued query parameters are now serialized as comma-separated values
+  (`?fields=a,b`) instead of `fields[]=a&fields[]=b`. (#41)
+
+### Added
+
+- `--max-tool-name-length <n>` (default 64): keep generated tool names within
+  the limit (Claude Desktop caps at 64). Names that fit are left unchanged.
+  Over-limit names are first **word-abbreviated** (inspired by ToolUniverse):
+  the leading category/verb word is preserved, short words are kept, and longer
+  words are shortened to their first 4 characters
+  (`FDA_get_info_on_conditions_for_doctor_consultation_by_drug_name` →
+  `FDA_get_info_on_cond_for_doct_cons_by_drug_name`), keeping every word
+  recognizable. If abbreviation still overflows, it falls back to deterministic
+  "Start…End" hash truncation (`head__tail_hash`). Collisions resolve via a
+  content hash of the operationId — stable across spec reordering. (#4)
+- `--header-passthrough <names>`: forward selected inbound HTTP headers
+  (web/streamable-http transports) onto the upstream API request, enabling
+  per-user API keys via MCP client headers. (#55)
+- OpenAPI `tags` are now surfaced in the tool definition and appended to the
+  tool description for grouping/filtering. (#59)
+- Operation `deprecated` status is surfaced in the tool definition and the
+  description is prefixed with `[DEPRECATED]`. (#49)
+- `--insecure` / `-k`: allow insecure HTTPS connections (skip TLS verification)
+  in the generated server, including OAuth token acquisition. (#46)
+- `--generate-lib`: emit library-style output that exports `main()` instead of
+  auto-invoking it and omits signal-handler/cleanup wiring. (#50)
+- The generated server now resolves its port from `--port`, then the `PORT`
+  environment variable, then `3000`. (#48, #50)
+- `--custom-auth`: generate an editable `src/auth.ts` hook (`applyCustomAuth`)
+  invoked before built-in auth; returning `true` skips built-in auth. (#9)
+- `--oauth-creds-in-body`: send OAuth2 client credentials in the token request
+  body instead of the Basic `Authorization` header. (#8)
+- `getToolsFromOpenApi` accepts `allowExternalRefs` and `maxToolNameLength`
+  options.
+
 ## [3.3.0] - 2026-03-03
 
 ### Added

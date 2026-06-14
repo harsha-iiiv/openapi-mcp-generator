@@ -8,6 +8,7 @@ import { OpenAPIV3 } from 'openapi-types';
 import { extractToolsFromApi } from './parser/extract-tools.js';
 import { McpToolDefinition } from './types/index.js';
 import { determineBaseUrl } from './utils/url.js';
+import { assertNoExternalRefs } from './utils/parser-security.js';
 
 /**
  * Options for generating the MCP tools
@@ -27,6 +28,18 @@ export interface GetToolsOptions {
 
   /** Default behavior for x-mcp filtering (default: true = include by default) */
   defaultInclude?: boolean;
+
+  /**
+   * Allow resolving external http(s) `$ref` references in the spec.
+   * Default false: external refs are rejected to prevent SSRF during parsing.
+   */
+  allowExternalRefs?: boolean;
+
+  /**
+   * Maximum length for generated tool names (Claude Desktop limit is 64).
+   * Default 64.
+   */
+  maxToolNameLength?: number;
 }
 
 function isOpenApiDocument(spec: string | OpenAPIV3.Document): spec is OpenAPIV3.Document {
@@ -45,15 +58,33 @@ export async function getToolsFromOpenApi(
   options: GetToolsOptions = {}
 ): Promise<McpToolDefinition[]> {
   try {
-    // Parse the OpenAPI spec
-    const api = isOpenApiDocument(specPathOrUrl)
-      ? specPathOrUrl
-      : options.dereference
-        ? ((await SwaggerParser.dereference(specPathOrUrl)) as OpenAPIV3.Document)
-        : ((await SwaggerParser.parse(specPathOrUrl)) as OpenAPIV3.Document);
+    const allowExternalRefs = options.allowExternalRefs ?? false;
+    // Resolve local/internal refs only when external refs are disallowed.
+    const resolverOptions = allowExternalRefs ? {} : { resolve: { http: false as const } };
+
+    // Parse the OpenAPI spec.
+    // Honor `dereference` for all input types, including a pre-parsed document
+    // (SwaggerParser accepts an API object as well as a path/URL string).
+    const api = options.dereference
+      ? ((await SwaggerParser.dereference(
+          specPathOrUrl as string,
+          resolverOptions
+        )) as OpenAPIV3.Document)
+      : isOpenApiDocument(specPathOrUrl)
+        ? specPathOrUrl
+        : ((await SwaggerParser.parse(specPathOrUrl, resolverOptions)) as OpenAPIV3.Document);
+
+    // Guard against SSRF via external $ref unless explicitly allowed.
+    if (!allowExternalRefs) {
+      assertNoExternalRefs(api);
+    }
 
     // Extract tools from the API
-    const allTools = extractToolsFromApi(api, options.defaultInclude ?? true);
+    const allTools = extractToolsFromApi(
+      api,
+      options.defaultInclude ?? true,
+      options.maxToolNameLength ?? 64
+    );
 
     // Add base URL to each tool
     const baseUrl = determineBaseUrl(api, options.baseUrl);

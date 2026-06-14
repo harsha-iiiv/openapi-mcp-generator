@@ -8,7 +8,6 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { Command } from 'commander';
-import SwaggerParser from '@apidevtools/swagger-parser';
 import { OpenAPIV3 } from 'openapi-types';
 
 // Import generators
@@ -26,11 +25,13 @@ import {
   generateTestClientHtml,
   generateStreamableHttpCode,
   generateStreamableHttpClientHtml,
+  generateCustomAuthStub,
 } from './generator/index.js';
 
 // Import types
 import { CliOptions, TransportType } from './types/index.js';
 import { normalizeBoolean } from './utils/helpers.js';
+import { parseSpecSecurely } from './utils/parser-security.js';
 import pkg from '../package.json' with { type: 'json' };
 
 // Export programmatic API
@@ -86,6 +87,48 @@ program
     },
     true
   )
+  .option(
+    '--allow-external-refs',
+    'Allow resolving external http(s) $ref references in the spec. Default: false (rejected to prevent SSRF).'
+  )
+  .option(
+    '--max-tool-name-length <number>',
+    'Maximum length for generated tool names (Claude Desktop limit is 64). Default: 64',
+    (val) => {
+      const parsed = parseInt(val, 10);
+      if (Number.isNaN(parsed) || parsed <= 0) {
+        console.warn(`Invalid value for --max-tool-name-length: "${val}". Using default: 64.`);
+        return 64;
+      }
+      return parsed;
+    },
+    64
+  )
+  .option(
+    '--header-passthrough <names>',
+    'Comma-separated inbound header names to forward to the upstream API (web/streamable-http transports).',
+    (val) =>
+      val
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+  )
+  .option(
+    '-k, --insecure',
+    'Allow insecure HTTPS connections (skip TLS certificate verification) in the generated server. Default: false.'
+  )
+  .option(
+    '--generate-lib',
+    'Generate library-style output: export main() instead of auto-invoking it. Default: false.'
+  )
+  .option(
+    '--custom-auth',
+    'Generate an editable src/auth.ts custom auth hook called before built-in auth. Default: false.'
+  )
+  .option(
+    '--oauth-creds-in-body',
+    'Send OAuth2 client credentials in the token request body instead of the Basic Authorization header. Default: false.'
+  )
   .option('--force', 'Overwrite existing files without prompting')
   .version(pkg.version) // Match package.json version
   .action((options) => {
@@ -108,6 +151,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
 
   const srcDir = path.join(outputDir, 'src');
   const serverFilePath = path.join(srcDir, 'index.ts');
+  const authFilePath = path.join(srcDir, 'auth.ts');
   const packageJsonPath = path.join(outputDir, 'package.json');
   const tsconfigPath = path.join(outputDir, 'tsconfig.json');
   const gitignorePath = path.join(outputDir, '.gitignore');
@@ -125,6 +169,14 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
 
   // StreamableHTTP files (if requested)
   const streamableHttpPath = path.join(srcDir, 'streamable-http.ts');
+
+  // Track whether the output directory already existed so the error handler can
+  // avoid deleting a pre-existing project (and any preserved files such as
+  // src/auth.ts) when --force is used and a later write fails.
+  const outputDirPreexisted = await fs
+    .stat(outputDir)
+    .then(() => true)
+    .catch(() => false);
 
   try {
     // Check if output directory exists and is not empty
@@ -144,9 +196,12 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       }
     }
 
-    // Parse OpenAPI spec
+    // Parse OpenAPI spec (with SSRF protection unless external refs are allowed)
     console.error(`Parsing OpenAPI spec: ${inputSpec}`);
-    const api = (await SwaggerParser.dereference(inputSpec)) as OpenAPIV3.Document;
+    const api: OpenAPIV3.Document = await parseSpecSecurely(
+      inputSpec,
+      Boolean(options.allowExternalRefs)
+    );
     console.error('OpenAPI spec parsed successfully.');
 
     // Determine server name and version
@@ -191,6 +246,21 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     await fs.writeFile(serverFilePath, serverTsContent);
     console.error(` -> Created ${serverFilePath}`);
 
+    // Custom auth hook stub (issue #9). Only write if not already present so
+    // user edits are preserved across re-generation.
+    if (options.customAuth) {
+      const authExists = await fs
+        .stat(authFilePath)
+        .then(() => true)
+        .catch(() => false);
+      if (authExists) {
+        console.error(` -> Skipped ${authFilePath} (already exists, preserving edits)`);
+      } else {
+        await fs.writeFile(authFilePath, generateCustomAuthStub());
+        console.error(` -> Created ${authFilePath}`);
+      }
+    }
+
     await fs.writeFile(packageJsonPath, packageJsonContent);
     console.error(` -> Created ${packageJsonPath}`);
 
@@ -222,11 +292,15 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     }
 
     // Generate web server files if web transport is requested
+    const enableHeaderPassthrough = Boolean(
+      Array.isArray(options.headerPassthrough) && options.headerPassthrough.length > 0
+    );
+
     if (options.transport === 'web') {
       console.error('Generating web server files...');
 
       // Generate web server code
-      const webServerCode = generateWebServerCode(options.port || 3000);
+      const webServerCode = generateWebServerCode(options.port ?? 3000, enableHeaderPassthrough);
       await fs.writeFile(webServerPath, webServerCode);
       console.error(` -> Created ${webServerPath}`);
 
@@ -244,7 +318,10 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       console.error('Generating StreamableHTTP server files...');
 
       // Generate StreamableHTTP server code
-      const streamableHttpCode = generateStreamableHttpCode(options.port || 3000);
+      const streamableHttpCode = generateStreamableHttpCode(
+        options.port ?? 3000,
+        enableHeaderPassthrough
+      );
       await fs.writeFile(streamableHttpPath, streamableHttpCode);
       console.error(` -> Created ${streamableHttpPath}`);
 
@@ -266,13 +343,13 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     if (options.transport === 'web') {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server in web mode: npm run start:web`);
-      console.error(`   (This will start a web server on port ${options.port || 3000})`);
-      console.error(`   Access the test client at: http://localhost:${options.port || 3000}`);
+      console.error(`   (This will start a web server on port ${options.port ?? 3000})`);
+      console.error(`   Access the test client at: http://localhost:${options.port ?? 3000}`);
     } else if (options.transport === 'streamable-http') {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server in StreamableHTTP mode: npm run start:http`);
-      console.error(`   (This will start a StreamableHTTP server on port ${options.port || 3000})`);
-      console.error(`   Access the test client at: http://localhost:${options.port || 3000}`);
+      console.error(`   (This will start a StreamableHTTP server on port ${options.port ?? 3000})`);
+      console.error(`   Access the test client at: http://localhost:${options.port ?? 3000}`);
     } else {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server: npm start`);
@@ -282,14 +359,20 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
   } catch (error) {
     console.error('\nError generating MCP server project:', error);
 
-    // Only attempt cleanup if the directory exists and force option was used
-    if (options.force) {
+    // Only clean up directories we created this run. If the output directory
+    // already existed, removing it could destroy a pre-existing project
+    // (including a preserved src/auth.ts), so leave it in place.
+    if (options.force && !outputDirPreexisted) {
       try {
         await fs.rm(outputDir, { recursive: true, force: true });
         console.error(`Cleaned up partially created directory: ${outputDir}`);
       } catch (cleanupError) {
         console.error(`Failed to cleanup directory ${outputDir}:`, cleanupError);
       }
+    } else if (options.force && outputDirPreexisted) {
+      console.error(
+        `Left existing directory ${outputDir} in place (it predated this run); some files may be partially written.`
+      );
     }
 
     process.exit(1);

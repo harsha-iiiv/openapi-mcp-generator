@@ -17,10 +17,12 @@ export function generateEnvExample(
 # Copy this file to .env and fill in the values
 
 # Server configuration
+# Port for web / streamable-http transports (also overridable via --port).
 PORT=3000
 LOG_LEVEL=info
-# If you have a server outside the servers list from OpenAPI, define it here.
-# Otherwise, omit this.
+# Override the target API base URL at runtime. Takes precedence over the value
+# baked in from the OpenAPI servers list, so you can switch environments
+# (staging/prod) without regenerating. Omit to use the spec-derived default.
 API_BASE_URL=your_api_base_url_here
 
 `;

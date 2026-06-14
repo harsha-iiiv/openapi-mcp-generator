@@ -45,8 +45,25 @@ export function generateToolDefinitionMap(
         console.warn(`Failed to stringify security requirements for tool ${tool.name}: ${e}`);
       }
 
-      // Sanitize description for template literal
-      const escapedDescription = sanitizeForTemplate(tool.description);
+      // Decorate the description with deprecation marker and tags for
+      // discoverability/filtering, then sanitize for the template literal.
+      const tags = Array.isArray(tool.tags) ? tool.tags.filter(Boolean) : [];
+      let decoratedDescription = tool.description;
+      if (tool.deprecated) {
+        decoratedDescription = `[DEPRECATED] ${decoratedDescription}`;
+      }
+      if (tags.length > 0) {
+        decoratedDescription = `${decoratedDescription}\n(Tags: ${tags.join(', ')})`;
+      }
+      const escapedDescription = sanitizeForTemplate(decoratedDescription);
+
+      let tagsString;
+      try {
+        tagsString = JSON.stringify(tags);
+      } catch (e) {
+        tagsString = '[]';
+        console.warn(`Failed to stringify tags for tool ${tool.name}: ${e}`);
+      }
 
       // Build the tool definition entry
       return `
@@ -58,7 +75,9 @@ export function generateToolDefinitionMap(
     pathTemplate: "${tool.pathTemplate}",
     executionParameters: ${execParamsString},
     requestBodyContentType: ${tool.requestBodyContentType ? `"${tool.requestBodyContentType}"` : 'undefined'},
-    securityRequirements: ${securityReqsString}
+    securityRequirements: ${securityReqsString},
+    tags: ${tagsString},
+    deprecated: ${tool.deprecated ? 'true' : 'false'}
   }],`;
     })
     .join('');
