@@ -145,4 +145,40 @@ describe('integration: generate + typecheck', () => {
     }
     expect(failed).toBe(true);
   });
+
+  it('generates a real-world spec (Swagger Petstore) that type-checks', () => {
+    const realSpec = path.join(here, 'fixtures', 'real-petstore.json');
+    const out = path.join(workdir, 'petstore');
+    execFileSync('node', [cliEntry, '--input', realSpec, '--output', out, '--force'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
+
+    // All generated tool names respect the 64-char limit (issue #4).
+    const names = [...indexTs.matchAll(/name: "([^"]+)"/g)].map((m) => m[1]);
+    expect(names.length).toBeGreaterThan(0);
+    for (const n of names) expect(n.length).toBeLessThanOrEqual(64);
+
+    // Every {pathParam} appears in its tool's executionParameters (issues #20/#44/#54).
+    const toolRe = /pathTemplate: "([^"]+)",\s*executionParameters: (\[[^\]]*\])/g;
+    let m: RegExpExecArray | null;
+    let pathParamTools = 0;
+    while ((m = toolRe.exec(indexTs))) {
+      const tmpl = m[1];
+      const params = [...tmpl.matchAll(/\{([^}]+)\}/g)].map((x) => x[1]);
+      if (params.length === 0) continue;
+      pathParamTools++;
+      const execNames = new Set(
+        (JSON.parse(m[2]) as { name: string; in: string }[]).map((e) => e.name)
+      );
+      for (const p of params)
+        expect(execNames.has(p), `missing path param ${p} in ${tmpl}`).toBe(true);
+    }
+    expect(pathParamTools).toBeGreaterThan(0);
+
+    const res = typecheckGenerated(path.join(out, 'src'));
+    expect(res.ok, res.output).toBe(true);
+  });
 });
