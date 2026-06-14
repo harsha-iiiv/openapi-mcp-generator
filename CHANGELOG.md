@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.1] - 2026-06-14
+
+### Fixed
+
+- The SSRF guard added in 4.0.0 disabled the HTTP resolver for the whole parse,
+  which also blocked fetching the user-supplied input when it was an `http(s)`
+  URL — e.g. `openapi-mcp-generator -i https://.../openapi.json` failed with
+  "Unable to resolve $ref pointer". The guard now only rejects external `$ref`s
+  embedded inside the spec; the trusted input URL/path still loads.
+- Relative `$ref`s in multi-file specs (e.g. `./refs/schemas.json#/Pet`) now
+  resolve against the spec's directory instead of the process working directory.
+- `getToolsFromOpenApi` (programmatic API) no longer hits the same URL-input
+  regression; it follows the same parse → scan → dereference flow with SSRF
+  protection intact.
+
 ## [4.0.0] - 2026-06-13
 
 A hardening-and-configurability release. All changes are backward compatible:

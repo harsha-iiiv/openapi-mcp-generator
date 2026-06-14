@@ -1,0 +1,17 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "MultiFile", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.example.com" }],
+  "paths": {
+    "/pets": {
+      "post": {
+        "operationId": "createPet",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "./refs/schemas.json#/Pet" } } }
+        },
+        "responses": { "201": { "description": "created" } }
+      }
+    }
+  }
+}

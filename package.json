@@ -1,6 +1,6 @@
 {
   "name": "openapi-mcp-generator",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Generates MCP server code from OpenAPI specifications",
   "license": "MIT",
   "author": "Harsha",
