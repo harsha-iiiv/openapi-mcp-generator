@@ -41,10 +41,11 @@ describe('#67 sanitizeForTemplate', () => {
     const malicious = 'desc ${process.env.SECRET}';
     const out = sanitizeForTemplate(malicious);
     expect(out).toBe('desc \\${process.env.SECRET}');
-    // When embedded in a real template literal, the expression is inert.
-    // eslint-disable-next-line no-eval
-    const rendered = eval('`' + out + '`');
-    expect(rendered).toBe('desc ${process.env.SECRET}');
+    // Every `${` is backslash-escaped, so none survives as a live interpolation
+    // when the value is embedded in a generated backtick template literal.
+    // (Verified by string inspection rather than eval to avoid SAST noise.)
+    expect(out).not.toMatch(/(^|[^\\])\$\{/);
+    expect(out).toContain('\\${');
   });
 
   it('handles empty/undefined input', () => {
