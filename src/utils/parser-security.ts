@@ -75,17 +75,29 @@ export function assertNoExternalRefs(node: unknown, seen: WeakSet<object> = new 
   }
 }
 
+/** True if the input is an http(s) URL string. */
+function isHttpUrlInput(input: string | OpenAPIV3.Document): input is string {
+  return typeof input === 'string' && /^https?:\/\//i.test(input.trim());
+}
+
 /**
  * Parse and dereference an OpenAPI spec with optional SSRF protection.
  *
  * The SSRF protection targets external `$ref`s embedded *inside* the spec, not
- * the user-supplied input itself: a URL passed as the input is trusted (the
- * user typed it) and must still be fetched. So when `allowExternalRefs` is
- * false (the default) we:
- *   1. Parse the input normally (the entry document — a URL input is fetched).
+ * the user-supplied input itself: a URL/path passed as the input is trusted
+ * (the user typed it) and must still load. When `allowExternalRefs` is false
+ * (the default) we:
+ *   1. Parse the entry document (http allowed so a URL input is fetched).
  *   2. Scan the parsed tree and reject any external http(s) `$ref`.
- *   3. Dereference the already-loaded object with the http resolver disabled —
- *      safe because step 2 guaranteed no external refs remain to follow.
+ *   3. Dereference with the http resolver disabled — safe because step 2
+ *      guaranteed no external refs remain to follow.
+ *
+ * Step 3 dereferences from the ORIGINAL local-path/object input (not the parsed
+ * object) so relative file `$ref`s (e.g. `./schemas.json#/MyType`) resolve
+ * against the spec's directory rather than the process cwd. For URL inputs,
+ * which can't be re-fetched once http is disabled, it dereferences the parsed
+ * object instead (URL specs are single-file or use absolute refs already
+ * rejected in step 2).
  *
  * @param input Path, URL, or pre-parsed document
  * @param allowExternalRefs Permit external http(s) `$ref` resolution
@@ -109,10 +121,14 @@ export async function parseSpecSecurely(
   // 2. Reject any external http(s) $ref embedded in the spec (SSRF guard).
   assertNoExternalRefs(parsed);
 
-  // 3. Dereference the already-loaded object with http disabled. No external
-  //    refs remain after the scan, so only local/internal refs are resolved and
-  //    nothing reaches out over the network.
-  return (await SwaggerParser.dereference(parsed, {
+  // 3. Dereference with http disabled. For local-path/object inputs, pass the
+  //    ORIGINAL input so relative file refs resolve against the spec directory;
+  //    for URL inputs (which can't be re-fetched with http off) dereference the
+  //    already-parsed object.
+  const dereferenceInput: Parameters<typeof SwaggerParser.dereference>[0] = isHttpUrlInput(input)
+    ? (parsed as unknown as Parameters<typeof SwaggerParser.dereference>[0])
+    : apiInput;
+  return (await SwaggerParser.dereference(dereferenceInput, {
     resolve: { http: false },
   })) as OpenAPIV3.Document;
 }

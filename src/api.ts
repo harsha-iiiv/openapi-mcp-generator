@@ -8,7 +8,7 @@ import { OpenAPIV3 } from 'openapi-types';
 import { extractToolsFromApi } from './parser/extract-tools.js';
 import { McpToolDefinition } from './types/index.js';
 import { determineBaseUrl } from './utils/url.js';
-import { assertNoExternalRefs } from './utils/parser-security.js';
+import { assertNoExternalRefs, parseSpecSecurely } from './utils/parser-security.js';
 
 /**
  * Options for generating the MCP tools
@@ -59,24 +59,23 @@ export async function getToolsFromOpenApi(
 ): Promise<McpToolDefinition[]> {
   try {
     const allowExternalRefs = options.allowExternalRefs ?? false;
-    // Resolve local/internal refs only when external refs are disallowed.
-    const resolverOptions = allowExternalRefs ? {} : { resolve: { http: false as const } };
 
-    // Parse the OpenAPI spec.
-    // Honor `dereference` for all input types, including a pre-parsed document
-    // (SwaggerParser accepts an API object as well as a path/URL string).
-    const api = options.dereference
-      ? ((await SwaggerParser.dereference(
-          specPathOrUrl as string,
-          resolverOptions
-        )) as OpenAPIV3.Document)
-      : isOpenApiDocument(specPathOrUrl)
-        ? specPathOrUrl
-        : ((await SwaggerParser.parse(specPathOrUrl, resolverOptions)) as OpenAPIV3.Document);
-
-    // Guard against SSRF via external $ref unless explicitly allowed.
-    if (!allowExternalRefs) {
-      assertNoExternalRefs(api);
+    let api: OpenAPIV3.Document;
+    if (options.dereference) {
+      // Dereference path: parseSpecSecurely loads the (trusted) entry document —
+      // including http(s) URLs — then enforces the SSRF guard before resolving.
+      api = await parseSpecSecurely(specPathOrUrl, allowExternalRefs);
+    } else if (isOpenApiDocument(specPathOrUrl)) {
+      // Pre-parsed document, no dereference requested: use as-is.
+      api = specPathOrUrl;
+      if (!allowExternalRefs) assertNoExternalRefs(api);
+    } else {
+      // Parse-only (no dereference): fetch/read the entry document (http allowed
+      // so a URL input loads), then enforce the SSRF guard on the raw tree.
+      api = (await SwaggerParser.parse(
+        specPathOrUrl as Parameters<typeof SwaggerParser.parse>[0]
+      )) as OpenAPIV3.Document;
+      if (!allowExternalRefs) assertNoExternalRefs(api);
     }
 
     // Extract tools from the API

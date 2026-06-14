@@ -139,6 +139,19 @@ describe('#68 external $ref SSRF guard', () => {
     expect(result.openapi).toBeDefined();
     expect(Object.keys(result.paths ?? {}).length).toBeGreaterThan(0);
   });
+
+  it('resolves relative $refs in a multi-file spec under the default guard', async () => {
+    // Regression: dereferencing must resolve relative file refs against the
+    // spec's directory (not the process cwd), so multi-file specs work.
+    const fixture = new URL('./fixtures/multifile/openapi.json', import.meta.url);
+    const result = await parseSpecSecurely(fileURLToPath(fixture), false);
+    const body = (result.paths?.['/pets'] as any)?.post?.requestBody?.content?.['application/json']
+      ?.schema;
+    // The `./refs/schemas.json#/Pet` ref must be inlined, not left dangling.
+    expect(body?.$ref).toBeUndefined();
+    expect(body?.properties?.name).toBeDefined();
+    expect(body?.properties?.id).toBeDefined();
+  });
 });
 
 // --- #4: tool name truncation ------------------------------------------------
