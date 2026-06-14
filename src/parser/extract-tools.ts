@@ -3,9 +3,27 @@
  */
 import { OpenAPIV3 } from 'openapi-types';
 import type { JSONSchema7, JSONSchema7TypeName } from 'json-schema';
+import { createHash } from 'crypto';
 import { generateOperationId } from '../utils/code-gen.js';
 import { McpToolDefinition } from '../types/index.js';
 import { shouldIncludeOperationForMcp } from '../utils/helpers.js';
+
+/** Default maximum tool name length (Claude Desktop limit). */
+export const DEFAULT_MAX_TOOL_NAME_LENGTH = 64;
+
+/**
+ * Truncate a tool name to `maxLength`, appending a short deterministic hash
+ * suffix when truncation occurs so distinct long names stay unique and stable
+ * across runs. Returns the name unchanged when already within the limit.
+ */
+export function truncateToolName(name: string, maxLength: number): string {
+  if (maxLength <= 0 || name.length <= maxLength) return name;
+  const hash = createHash('sha1').update(name).digest('hex').slice(0, 6);
+  const suffix = `_${hash}`;
+  // Reserve room for the suffix; guard against tiny limits.
+  const headLength = Math.max(1, maxLength - suffix.length);
+  return `${name.slice(0, headLength)}${suffix}`.slice(0, maxLength);
+}
 
 /**
  * Extracts tool definitions from an OpenAPI document
@@ -15,7 +33,8 @@ import { shouldIncludeOperationForMcp } from '../utils/helpers.js';
  */
 export function extractToolsFromApi(
   api: OpenAPIV3.Document,
-  defaultInclude: boolean = true
+  defaultInclude: boolean = true,
+  maxToolNameLength: number = DEFAULT_MAX_TOOL_NAME_LENGTH
 ): McpToolDefinition[] {
   const tools: McpToolDefinition[] = [];
   const usedNames = new Set<string>();
@@ -68,10 +87,15 @@ export function extractToolsFromApi(
       // Sanitize the name to be MCP-compatible (only a-z, 0-9, _, -)
       baseName = baseName.replace(/\./g, '_').replace(/[^a-z0-9_-]/gi, '_');
 
+      // Enforce the maximum tool name length (Claude Desktop limit is 64).
+      baseName = truncateToolName(baseName, maxToolNameLength);
+
       let finalToolName = baseName;
       let counter = 1;
       while (usedNames.has(finalToolName)) {
-        finalToolName = `${baseName}_${counter++}`;
+        const candidate = `${baseName}_${counter++}`;
+        // Keep collision-resolved names within the limit too.
+        finalToolName = truncateToolName(candidate, maxToolNameLength);
       }
       usedNames.add(finalToolName);
 
@@ -92,6 +116,10 @@ export function extractToolsFromApi(
       const securityRequirements =
         operation.security === null ? globalSecurity : operation.security || globalSecurity;
 
+      // Extract OpenAPI tags and deprecation status
+      const tags = Array.isArray(operation.tags) ? operation.tags.filter(Boolean) : [];
+      const deprecated = operation.deprecated === true;
+
       // Create the tool definition
       tools.push({
         name: finalToolName,
@@ -104,6 +132,8 @@ export function extractToolsFromApi(
         requestBodyContentType,
         securityRequirements,
         operationId: baseName,
+        tags,
+        deprecated,
       });
     }
   }

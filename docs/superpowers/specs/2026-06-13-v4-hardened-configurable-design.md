@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-13
 **Status:** Approved (design)
-**Author:** Harsha v (with Claude Code)
+**Author:** Harsha v
 
 ## Goal
 

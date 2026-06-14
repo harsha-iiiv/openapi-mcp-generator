@@ -1,0 +1,295 @@
+/**
+ * Unit tests for v4.0.0 security fixes, bug fixes, and features.
+ * Run with: npm test
+ */
+import { describe, it, expect } from 'vitest';
+import { OpenAPIV3 } from 'openapi-types';
+
+import { sanitizeForTemplate } from '../src/utils/helpers.js';
+import {
+  assertNoExternalRefs,
+  isExternalHttpRef,
+  ExternalRefError,
+} from '../src/utils/parser-security.js';
+import { extractToolsFromApi, truncateToolName } from '../src/parser/extract-tools.js';
+import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
+import {
+  generateOAuth2TokenAcquisitionCode,
+  generateExecuteApiToolFunction,
+  getSecurityModuleImports,
+} from '../src/utils/security.js';
+import { generateMcpServerCode, generateCustomAuthStub } from '../src/generator/server-code.js';
+import type { McpToolDefinition } from '../src/types/index.js';
+
+// --- #67: template-literal injection ---------------------------------------
+
+describe('#67 sanitizeForTemplate', () => {
+  it('escapes backticks and backslashes', () => {
+    expect(sanitizeForTemplate('a`b\\c')).toBe('a\\`b\\\\c');
+  });
+
+  it('escapes ${ template-expression sequences', () => {
+    const malicious = 'desc ${process.env.SECRET}';
+    const out = sanitizeForTemplate(malicious);
+    expect(out).toBe('desc \\${process.env.SECRET}');
+    // When embedded in a real template literal, the expression is inert.
+    // eslint-disable-next-line no-eval
+    const rendered = eval('`' + out + '`');
+    expect(rendered).toBe('desc ${process.env.SECRET}');
+  });
+
+  it('handles empty/undefined input', () => {
+    expect(sanitizeForTemplate('')).toBe('');
+    // @ts-expect-error testing runtime guard
+    expect(sanitizeForTemplate(undefined)).toBe('');
+  });
+});
+
+// --- #68: SSRF external $ref guard ------------------------------------------
+
+describe('#68 external $ref SSRF guard', () => {
+  it('detects http(s) refs', () => {
+    expect(isExternalHttpRef('http://169.254.169.254/')).toBe(true);
+    expect(isExternalHttpRef('https://evil.test/x.json')).toBe(true);
+    expect(isExternalHttpRef('#/components/schemas/Foo')).toBe(false);
+    expect(isExternalHttpRef('./local.yaml')).toBe(false);
+    expect(isExternalHttpRef(42)).toBe(false);
+  });
+
+  it('throws on a nested external ref', () => {
+    const spec = {
+      openapi: '3.0.0',
+      paths: { '/x': { get: { responses: { 200: { $ref: 'http://internal/svc' } } } } },
+    };
+    expect(() => assertNoExternalRefs(spec)).toThrow(ExternalRefError);
+  });
+
+  it('allows local refs', () => {
+    const spec = { a: { $ref: '#/components/schemas/Foo' }, b: { $ref: './local.yaml' } };
+    expect(() => assertNoExternalRefs(spec)).not.toThrow();
+  });
+
+  it('handles cyclic objects without infinite recursion', () => {
+    const a: any = { name: 'a' };
+    a.self = a;
+    expect(() => assertNoExternalRefs(a)).not.toThrow();
+  });
+});
+
+// --- #4: tool name truncation ------------------------------------------------
+
+describe('#4 tool name truncation', () => {
+  it('leaves short names unchanged', () => {
+    expect(truncateToolName('getUser', 64)).toBe('getUser');
+  });
+
+  it('truncates long names to the limit with a hash suffix', () => {
+    const long = 'a'.repeat(100);
+    const out = truncateToolName(long, 64);
+    expect(out.length).toBeLessThanOrEqual(64);
+    expect(out).not.toBe(long);
+  });
+
+  it('is deterministic and unique across distinct inputs', () => {
+    const a = truncateToolName('x'.repeat(80) + '_alpha', 64);
+    const b = truncateToolName('x'.repeat(80) + '_beta', 64);
+    expect(a).toBe(truncateToolName('x'.repeat(80) + '_alpha', 64));
+    expect(a).not.toBe(b);
+  });
+
+  it('applies during extraction and keeps names unique', () => {
+    const longId = 'operation_' + 'X'.repeat(80);
+    const api: OpenAPIV3.Document = {
+      openapi: '3.0.0',
+      info: { title: 't', version: '1' },
+      paths: {
+        '/a': { get: { operationId: longId, responses: {} } },
+        '/b': { get: { operationId: longId, responses: {} } },
+      },
+    };
+    const tools = extractToolsFromApi(api, true, 64);
+    expect(tools).toHaveLength(2);
+    for (const t of tools) expect(t.name.length).toBeLessThanOrEqual(64);
+    expect(tools[0].name).not.toBe(tools[1].name);
+  });
+});
+
+// --- #59 / #49: tags & deprecated -------------------------------------------
+
+describe('#59 tags and #49 deprecated extraction', () => {
+  const api: OpenAPIV3.Document = {
+    openapi: '3.0.0',
+    info: { title: 't', version: '1' },
+    paths: {
+      '/pets': {
+        get: {
+          operationId: 'listPets',
+          tags: ['pets', 'public'],
+          deprecated: true,
+          responses: {},
+        },
+      },
+    },
+  };
+
+  it('extracts tags and deprecated onto the tool definition', () => {
+    const [tool] = extractToolsFromApi(api, true, 64);
+    expect(tool.tags).toEqual(['pets', 'public']);
+    expect(tool.deprecated).toBe(true);
+  });
+
+  it('emits tags/deprecated and decorates the description in generated map', () => {
+    const [tool] = extractToolsFromApi(api, true, 64);
+    const code = generateToolDefinitionMap([tool]);
+    expect(code).toContain('tags: ["pets","public"]');
+    expect(code).toContain('deprecated: true');
+    expect(code).toContain('[DEPRECATED]');
+    expect(code).toContain('(Tags: pets, public)');
+  });
+});
+
+// --- #56: OAuth scheme name resolution --------------------------------------
+
+describe('#56 OAuth env var resolves from runtime scheme name', () => {
+  it('does not emit a literal SCHEMENAME env lookup', () => {
+    const code = generateOAuth2TokenAcquisitionCode();
+    expect(code).not.toContain('OAUTH_CLIENT_ID_SCHEMENAME');
+    expect(code).not.toContain('OAUTH_CLIENT_SECRET_SCHEMENAME');
+    // Should derive the var name from the runtime schemeName argument.
+    expect(code).toContain('schemeName.replace(');
+  });
+});
+
+// --- #66: basic auth empty password -----------------------------------------
+
+describe('#66 basic auth with empty password', () => {
+  it('requires only a username (username != null) and defaults password', () => {
+    const code = generateExecuteApiToolFunction();
+    expect(code).toContain('username != null');
+    expect(code).toContain("password ?? ''");
+    expect(code).not.toContain('if (username && password)');
+  });
+});
+
+// --- #41: array query params -------------------------------------------------
+
+describe('#41 array query param serialization', () => {
+  it('emits a paramsSerializer that joins arrays with commas', () => {
+    const code = generateExecuteApiToolFunction();
+    expect(code).toContain('paramsSerializer');
+    expect(code).toContain("value.join(',')");
+  });
+});
+
+// --- #65: content-type coercion ---------------------------------------------
+
+describe('#65 content-type build fix', () => {
+  it('coerces the header value to string before lowercasing', () => {
+    const code = generateExecuteApiToolFunction();
+    expect(code).toContain("String(response.headers['content-type'] ?? '').toLowerCase()");
+    expect(code).not.toContain("response.headers['content-type']?.toLowerCase()");
+  });
+});
+
+// --- #46 / #8 / #9 / #55: opt-in flags --------------------------------------
+
+describe('opt-in security/execution options', () => {
+  it('#46 insecure adds https import and agent only when enabled', () => {
+    expect(getSecurityModuleImports({ insecure: true })).toContain('import * as https');
+    expect(getSecurityModuleImports({})).not.toContain('https');
+    const code = generateExecuteApiToolFunction(undefined, { insecure: true });
+    expect(code).toContain('rejectUnauthorized: false');
+    expect(generateExecuteApiToolFunction(undefined, {})).not.toContain('rejectUnauthorized');
+  });
+
+  it('#8 oauth-creds-in-body moves credentials into the form body', () => {
+    const inBody = generateOAuth2TokenAcquisitionCode({ oauthCredsInBody: true });
+    expect(inBody).toContain("formData.append('client_id', clientId)");
+    expect(inBody).toContain("formData.append('client_secret', clientSecret)");
+    const header = generateOAuth2TokenAcquisitionCode({});
+    expect(header).toContain("'Authorization': `Basic");
+    expect(header).not.toContain("formData.append('client_id'");
+  });
+
+  it('#9 custom-auth wires the hook import and call', () => {
+    expect(getSecurityModuleImports({ customAuth: true })).toContain("from './auth.js'");
+    const code = generateExecuteApiToolFunction(undefined, { customAuth: true });
+    expect(code).toContain('applyCustomAuth(');
+    expect(generateExecuteApiToolFunction(undefined, {})).not.toContain('applyCustomAuth');
+  });
+
+  it('#55 header passthrough emits forwarding code only when names provided', () => {
+    const code = generateExecuteApiToolFunction(undefined, { headerPassthrough: ['X-API-KEY'] });
+    expect(code).toContain('__mcpInboundHeaders');
+    expect(code).toContain('"x-api-key"');
+    expect(generateExecuteApiToolFunction(undefined, {})).not.toContain('__mcpInboundHeaders');
+  });
+
+  it('generates a valid custom auth stub', () => {
+    const stub = generateCustomAuthStub();
+    expect(stub).toContain('export async function applyCustomAuth');
+    expect(stub).toContain('CustomAuthContext');
+    expect(stub).toContain('return false;');
+  });
+});
+
+// --- #50: PORT env fallback + lib mode --------------------------------------
+
+describe('#50 PORT env fallback and library mode', () => {
+  const api: OpenAPIV3.Document = {
+    openapi: '3.0.0',
+    info: { title: 't', version: '1' },
+    servers: [{ url: 'https://api.test' }],
+    paths: { '/x': { get: { operationId: 'getX', responses: {} } } },
+  };
+
+  it('uses PORT env fallback when no --port given (web transport)', () => {
+    const code = generateMcpServerCode(api, { input: '', output: '', transport: 'web' }, 's', '1');
+    expect(code).toContain('Number(process.env.PORT) || 3000');
+  });
+
+  it('uses the explicit port when provided', () => {
+    const code = generateMcpServerCode(
+      api,
+      { input: '', output: '', transport: 'web', port: 8080 },
+      's',
+      '1'
+    );
+    expect(code).toContain('setupWebServer(server, 8080)');
+  });
+
+  it('exports main and omits auto-invoke in lib mode', () => {
+    const lib = generateMcpServerCode(api, { input: '', output: '', generateLib: true }, 's', '1');
+    expect(lib).toContain('export async function main()');
+    expect(lib).not.toContain("process.on('SIGINT'");
+    const normal = generateMcpServerCode(api, { input: '', output: '' }, 's', '1');
+    expect(normal).toContain("process.on('SIGINT'");
+    expect(normal).not.toContain('export async function main()');
+  });
+});
+
+// --- regression: tool definition map is well-formed -------------------------
+
+describe('generated tool definition map shape', () => {
+  it('includes all expected fields', () => {
+    const tool: McpToolDefinition = {
+      name: 'getX',
+      description: 'gets x',
+      inputSchema: { type: 'object', properties: {} },
+      method: 'get',
+      pathTemplate: '/x',
+      parameters: [],
+      executionParameters: [],
+      securityRequirements: [],
+      operationId: 'getX',
+      tags: ['t'],
+      deprecated: false,
+    };
+    const code = generateToolDefinitionMap([tool]);
+    expect(code).toContain('"getX"');
+    expect(code).toContain('method: "get"');
+    expect(code).toContain('pathTemplate: "/x"');
+    expect(code).toContain('tags: ["t"]');
+    expect(code).toContain('deprecated: false');
+  });
+});

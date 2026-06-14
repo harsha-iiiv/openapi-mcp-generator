@@ -20,13 +20,23 @@ export function safeJsonStringify(obj: any, defaultValue: string = '{}'): string
 }
 
 /**
- * Sanitizes a string for use in template strings
+ * Sanitizes a string for safe embedding inside a generated backtick template
+ * literal.
+ *
+ * Escapes, in order:
+ *  - backslashes (so subsequent escapes are not themselves re-escaped)
+ *  - backticks (would otherwise close the template literal)
+ *  - `${` sequences (would otherwise be evaluated as template expressions)
+ *
+ * The `${` escaping prevents template-literal injection: a malicious OpenAPI
+ * `description`/`summary` such as `${process.env.SECRET}` is otherwise written
+ * verbatim into generated code and evaluated at server startup.
  *
  * @param str String to sanitize
  * @returns Sanitized string safe for use in template literals
  */
 export function sanitizeForTemplate(str: string): string {
-  return (str || '').replace(/\\/g, '\\\\').replace(/`/g, '\\`');
+  return (str || '').replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
 }
 
 /**

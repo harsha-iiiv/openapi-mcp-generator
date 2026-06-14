@@ -214,8 +214,20 @@ app.get("/sse", (c) => {
 
 // API endpoint for clients to send messages
 app.post("/api/messages", async (c) => {
+  // Capture inbound headers so configured ones can be forwarded to the
+  // upstream API by executeApiTool (header passthrough, issue #55).
+  try {
+    const inbound: Record<string, string> = {};
+    for (const [k, v] of Object.entries(c.req.header())) {
+      if (typeof v === 'string') inbound[k.toLowerCase()] = v;
+    }
+    (globalThis as any).__mcpInboundHeaders = inbound;
+  } catch {
+    // Non-fatal: passthrough simply won't apply if headers can't be read.
+  }
+
   const sessionId = c.req.query('sessionId');
-  
+
   if (!sessionId) {
     return c.json({ error: 'Missing sessionId query parameter' }, 400);
   }

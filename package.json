@@ -1,6 +1,6 @@
 {
   "name": "openapi-mcp-generator",
-  "version": "3.3.0",
+  "version": "4.0.0",
   "description": "Generates MCP server code from OpenAPI specifications",
   "license": "MIT",
   "author": "Harsha",
@@ -25,6 +25,8 @@
     "format.check": "prettier --check .",
     "format.write": "prettier --write .",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build": "tsc && chmod 755 dist/index.js bin/openapi-mcp-generator.js",
     "version:patch": "npm version patch",
     "version:minor": "npm version minor",
@@ -59,7 +61,8 @@
     "eslint": "^9.33.0",
     "prettier": "^3.6.2",
     "rimraf": "^6.0.1",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^2.1.9"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.10.2",

@@ -48,17 +48,29 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 
 ### CLI Options
 
-| Option              | Alias | Description                                                                                                                                    | Default                           |
-| ------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `--input`           | `-i`  | Path or URL to OpenAPI specification (YAML or JSON)                                                                                            | **Required**                      |
-| `--output`          | `-o`  | Directory to output the generated MCP project                                                                                                  | **Required**                      |
-| `--server-name`     | `-n`  | Name of the MCP server (`package.json:name`)                                                                                                   | OpenAPI title or `mcp-api-server` |
-| `--server-version`  | `-v`  | Version of the MCP server (`package.json:version`)                                                                                             | OpenAPI version or `1.0.0`        |
-| `--base-url`        | `-b`  | Base URL for API requests. Required if OpenAPI `servers` missing or ambiguous.                                                                 | Auto-detected if possible         |
-| `--transport`       | `-t`  | Transport mode: `"stdio"` (default), `"web"`, or `"streamable-http"`                                                                           | `"stdio"`                         |
-| `--port`            | `-p`  | Port for web-based transports                                                                                                                  | `3000`                            |
-| `--default-include` |       | Default behavior for x-mcp filtering. Accepts `true` or `false` (case-insensitive). `true` = include by default, `false` = exclude by default. | `true`                            |
-| `--force`           |       | Overwrite existing files in the output directory without confirmation                                                                          | `false`                           |
+| Option                   | Alias | Description                                                                                                                                    | Default                           |
+| ------------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `--input`                | `-i`  | Path or URL to OpenAPI specification (YAML or JSON)                                                                                            | **Required**                      |
+| `--output`               | `-o`  | Directory to output the generated MCP project                                                                                                  | **Required**                      |
+| `--server-name`          | `-n`  | Name of the MCP server (`package.json:name`)                                                                                                   | OpenAPI title or `mcp-api-server` |
+| `--server-version`       | `-v`  | Version of the MCP server (`package.json:version`)                                                                                             | OpenAPI version or `1.0.0`        |
+| `--base-url`             | `-b`  | Base URL for API requests. Required if OpenAPI `servers` missing or ambiguous.                                                                 | Auto-detected if possible         |
+| `--transport`            | `-t`  | Transport mode: `"stdio"` (default), `"web"`, or `"streamable-http"`                                                                           | `"stdio"`                         |
+| `--port`                 | `-p`  | Port for web-based transports                                                                                                                  | `3000`                            |
+| `--default-include`      |       | Default behavior for x-mcp filtering. Accepts `true` or `false` (case-insensitive). `true` = include by default, `false` = exclude by default. | `true`                            |
+| `--allow-external-refs`  |       | Allow resolving external `http(s)` `$ref` references in the spec. Disabled by default to prevent SSRF during parsing.                          | `false`                           |
+| `--max-tool-name-length` |       | Maximum length for generated tool names (Claude Desktop caps at 64). Longer names are truncated with a hash suffix.                            | `64`                              |
+| `--header-passthrough`   |       | Comma-separated inbound header names to forward to the upstream API (web/streamable-http). Enables per-user API keys via MCP client headers.   | _(none)_                          |
+| `--insecure`             | `-k`  | Allow insecure HTTPS connections (skip TLS certificate verification) in the generated server.                                                  | `false`                           |
+| `--generate-lib`         |       | Generate library-style output: export `main()` instead of auto-invoking it, omitting signal/cleanup wiring.                                    | `false`                           |
+| `--custom-auth`          |       | Generate an editable `src/auth.ts` hook (`applyCustomAuth`) called before built-in auth; return `true` to skip built-in auth.                  | `false`                           |
+| `--oauth-creds-in-body`  |       | Send OAuth2 client credentials in the token request body instead of the Basic `Authorization` header.                                          | `false`                           |
+| `--force`                |       | Overwrite existing files in the output directory without confirmation                                                                          | `false`                           |
+
+> **Configuring the API base URL at runtime:** the generated server reads
+> `API_BASE_URL` from the environment (`.env`), overriding the value baked in
+> from the OpenAPI `servers` list. The port resolves from `--port`, then the
+> `PORT` env var, then `3000`.
 
 ## 📦 Programmatic API
 

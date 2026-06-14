@@ -57,7 +57,19 @@ class MCPStreamableHttpServer {
   async handlePostRequest(c: any) {
     const sessionId = c.req.header(SESSION_ID_HEADER_NAME);
     console.error(\`POST request received \${sessionId ? 'with session ID: ' + sessionId : 'without session ID'}\`);
-    
+
+    // Capture inbound headers so configured ones can be forwarded to the
+    // upstream API by executeApiTool (header passthrough, issue #55).
+    try {
+      const inbound: Record<string, string> = {};
+      for (const [k, v] of Object.entries(c.req.header())) {
+        if (typeof v === 'string') inbound[k.toLowerCase()] = v;
+      }
+      (globalThis as any).__mcpInboundHeaders = inbound;
+    } catch {
+      // Non-fatal: passthrough simply won't apply if headers can't be read.
+    }
+
     try {
       const body = await c.req.json();
       

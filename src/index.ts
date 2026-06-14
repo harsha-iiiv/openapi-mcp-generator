@@ -8,7 +8,6 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { Command } from 'commander';
-import SwaggerParser from '@apidevtools/swagger-parser';
 import { OpenAPIV3 } from 'openapi-types';
 
 // Import generators
@@ -26,11 +25,13 @@ import {
   generateTestClientHtml,
   generateStreamableHttpCode,
   generateStreamableHttpClientHtml,
+  generateCustomAuthStub,
 } from './generator/index.js';
 
 // Import types
 import { CliOptions, TransportType } from './types/index.js';
 import { normalizeBoolean } from './utils/helpers.js';
+import { parseSpecSecurely } from './utils/parser-security.js';
 import pkg from '../package.json' with { type: 'json' };
 
 // Export programmatic API
@@ -86,6 +87,48 @@ program
     },
     true
   )
+  .option(
+    '--allow-external-refs',
+    'Allow resolving external http(s) $ref references in the spec. Default: false (rejected to prevent SSRF).'
+  )
+  .option(
+    '--max-tool-name-length <number>',
+    'Maximum length for generated tool names (Claude Desktop limit is 64). Default: 64',
+    (val) => {
+      const parsed = parseInt(val, 10);
+      if (Number.isNaN(parsed) || parsed <= 0) {
+        console.warn(`Invalid value for --max-tool-name-length: "${val}". Using default: 64.`);
+        return 64;
+      }
+      return parsed;
+    },
+    64
+  )
+  .option(
+    '--header-passthrough <names>',
+    'Comma-separated inbound header names to forward to the upstream API (web/streamable-http transports).',
+    (val) =>
+      val
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+  )
+  .option(
+    '-k, --insecure',
+    'Allow insecure HTTPS connections (skip TLS certificate verification) in the generated server. Default: false.'
+  )
+  .option(
+    '--generate-lib',
+    'Generate library-style output: export main() instead of auto-invoking it. Default: false.'
+  )
+  .option(
+    '--custom-auth',
+    'Generate an editable src/auth.ts custom auth hook called before built-in auth. Default: false.'
+  )
+  .option(
+    '--oauth-creds-in-body',
+    'Send OAuth2 client credentials in the token request body instead of the Basic Authorization header. Default: false.'
+  )
   .option('--force', 'Overwrite existing files without prompting')
   .version(pkg.version) // Match package.json version
   .action((options) => {
@@ -108,6 +151,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
 
   const srcDir = path.join(outputDir, 'src');
   const serverFilePath = path.join(srcDir, 'index.ts');
+  const authFilePath = path.join(srcDir, 'auth.ts');
   const packageJsonPath = path.join(outputDir, 'package.json');
   const tsconfigPath = path.join(outputDir, 'tsconfig.json');
   const gitignorePath = path.join(outputDir, '.gitignore');
@@ -144,9 +188,12 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       }
     }
 
-    // Parse OpenAPI spec
+    // Parse OpenAPI spec (with SSRF protection unless external refs are allowed)
     console.error(`Parsing OpenAPI spec: ${inputSpec}`);
-    const api = (await SwaggerParser.dereference(inputSpec)) as OpenAPIV3.Document;
+    const api: OpenAPIV3.Document = await parseSpecSecurely(
+      inputSpec,
+      Boolean(options.allowExternalRefs)
+    );
     console.error('OpenAPI spec parsed successfully.');
 
     // Determine server name and version
@@ -190,6 +237,21 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
 
     await fs.writeFile(serverFilePath, serverTsContent);
     console.error(` -> Created ${serverFilePath}`);
+
+    // Custom auth hook stub (issue #9). Only write if not already present so
+    // user edits are preserved across re-generation.
+    if (options.customAuth) {
+      const authExists = await fs
+        .stat(authFilePath)
+        .then(() => true)
+        .catch(() => false);
+      if (authExists) {
+        console.error(` -> Skipped ${authFilePath} (already exists, preserving edits)`);
+      } else {
+        await fs.writeFile(authFilePath, generateCustomAuthStub());
+        console.error(` -> Created ${authFilePath}`);
+      }
+    }
 
     await fs.writeFile(packageJsonPath, packageJsonContent);
     console.error(` -> Created ${packageJsonPath}`);
