@@ -284,11 +284,15 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     }
 
     // Generate web server files if web transport is requested
+    const enableHeaderPassthrough = Boolean(
+      Array.isArray(options.headerPassthrough) && options.headerPassthrough.length > 0
+    );
+
     if (options.transport === 'web') {
       console.error('Generating web server files...');
 
       // Generate web server code
-      const webServerCode = generateWebServerCode(options.port || 3000);
+      const webServerCode = generateWebServerCode(options.port || 3000, enableHeaderPassthrough);
       await fs.writeFile(webServerPath, webServerCode);
       console.error(` -> Created ${webServerPath}`);
 
@@ -306,7 +310,10 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       console.error('Generating StreamableHTTP server files...');
 
       // Generate StreamableHTTP server code
-      const streamableHttpCode = generateStreamableHttpCode(options.port || 3000);
+      const streamableHttpCode = generateStreamableHttpCode(
+        options.port || 3000,
+        enableHeaderPassthrough
+      );
       await fs.writeFile(streamableHttpPath, streamableHttpCode);
       console.error(` -> Created ${streamableHttpPath}`);
 

@@ -31,11 +31,23 @@ export function truncateToolName(name: string, maxLength: number): string {
  * @param api OpenAPI document
  * @returns Array of MCP tool definitions
  */
+/** Smallest tool-name length that still guarantees collision-resolution progress. */
+export const MIN_TOOL_NAME_LENGTH = 8;
+
 export function extractToolsFromApi(
   api: OpenAPIV3.Document,
   defaultInclude: boolean = true,
   maxToolNameLength: number = DEFAULT_MAX_TOOL_NAME_LENGTH
 ): McpToolDefinition[] {
+  // Clamp pathologically small limits so the collision-resolution loop below
+  // always makes progress (the 6-char hash suffix needs room to stay unique).
+  if (maxToolNameLength < MIN_TOOL_NAME_LENGTH) {
+    console.warn(
+      `maxToolNameLength=${maxToolNameLength} is too small; using ${MIN_TOOL_NAME_LENGTH} to keep tool names unique.`
+    );
+    maxToolNameLength = MIN_TOOL_NAME_LENGTH;
+  }
+
   const tools: McpToolDefinition[] = [];
   const usedNames = new Set<string>();
   const globalSecurity = api.security || [];

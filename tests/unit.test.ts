@@ -17,6 +17,8 @@ import {
   generateOAuth2TokenAcquisitionCode,
   generateExecuteApiToolFunction,
   getSecurityModuleImports,
+  getInboundHeaderStoreDeclaration,
+  generateHttpSecurityCode,
 } from '../src/utils/security.js';
 import { generateMcpServerCode, generateCustomAuthStub } from '../src/generator/server-code.js';
 import type { McpToolDefinition } from '../src/types/index.js';
@@ -169,6 +171,13 @@ describe('#66 basic auth with empty password', () => {
     expect(code).toContain("password ?? ''");
     expect(code).not.toContain('if (username && password)');
   });
+
+  it('keeps the exported generateHttpSecurityCode helper in sync', () => {
+    const code = generateHttpSecurityCode();
+    expect(code).toContain('username != null');
+    expect(code).toContain("password ?? ''");
+    expect(code).not.toContain('if (username && password)');
+  });
 });
 
 // --- #41: array query params -------------------------------------------------
@@ -218,11 +227,28 @@ describe('opt-in security/execution options', () => {
     expect(generateExecuteApiToolFunction(undefined, {})).not.toContain('applyCustomAuth');
   });
 
-  it('#55 header passthrough emits forwarding code only when names provided', () => {
+  it('#55 header passthrough reads request-scoped store only when names provided', () => {
     const code = generateExecuteApiToolFunction(undefined, { headerPassthrough: ['X-API-KEY'] });
-    expect(code).toContain('__mcpInboundHeaders');
+    // Reads from request-scoped AsyncLocalStorage, NOT a shared global.
+    expect(code).toContain('inboundHeaderStore.getStore()');
+    expect(code).not.toContain('globalThis');
     expect(code).toContain('"x-api-key"');
-    expect(generateExecuteApiToolFunction(undefined, {})).not.toContain('__mcpInboundHeaders');
+    expect(generateExecuteApiToolFunction(undefined, {})).not.toContain('inboundHeaderStore');
+  });
+
+  it('#55 emits the AsyncLocalStorage import + store declaration when enabled', () => {
+    const opts = { headerPassthrough: ['X-API-KEY'] };
+    expect(getSecurityModuleImports(opts)).toContain("from 'async_hooks'");
+    expect(getInboundHeaderStoreDeclaration(opts)).toContain('new AsyncLocalStorage');
+    expect(getInboundHeaderStoreDeclaration({})).toBe('');
+    expect(getSecurityModuleImports({})).not.toContain('async_hooks');
+  });
+
+  it('#9 custom-auth guards built-in auth behind the hook result', () => {
+    const code = generateExecuteApiToolFunction(undefined, { customAuth: true });
+    // Built-in auth must be skipped when the hook handled it.
+    expect(code).toContain('if (!customAuthHandled)');
+    expect(generateExecuteApiToolFunction(undefined, {})).not.toContain('customAuthHandled');
   });
 
   it('generates a valid custom auth stub', () => {

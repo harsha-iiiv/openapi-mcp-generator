@@ -70,8 +70,9 @@ export function generateHttpSecurityCode(): string {
         else if (scheme.scheme?.toLowerCase() === 'basic') {
             const username = process.env[\`${getEnvVarName(schemeName, 'BASIC_USERNAME')}\`];
             const password = process.env[\`${getEnvVarName(schemeName, 'BASIC_PASSWORD')}\`];
-            if (username && password) {
-                headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`;
+            // Empty password is valid per RFC 7617 (issue #66); only username is required.
+            if (username != null) {
+                headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password ?? ''}\`).toString('base64')}\`;
             }
         }
     }`;
@@ -250,7 +251,36 @@ export function getSecurityModuleImports(options: SecurityCodeOptions = {}): str
   if (options.customAuth) {
     imports += `import { applyCustomAuth } from './auth.js';\n`;
   }
+  if (
+    Array.isArray(options.headerPassthrough) &&
+    options.headerPassthrough.filter(Boolean).length
+  ) {
+    imports += `import { AsyncLocalStorage } from 'async_hooks';\n`;
+  }
   return imports;
+}
+
+/**
+ * Declaration for the request-scoped inbound-header store used by header
+ * passthrough (issue #55). Exported so the web/streamable-http transports can
+ * run each request inside `inboundHeaderStore.run(headers, ...)`, giving
+ * concurrency-safe, per-request header forwarding (no shared global state).
+ *
+ * @param options Generation options
+ * @returns Declaration source (empty unless header passthrough is enabled)
+ */
+export function getInboundHeaderStoreDeclaration(options: SecurityCodeOptions = {}): string {
+  const enabled =
+    Array.isArray(options.headerPassthrough) &&
+    options.headerPassthrough.filter(Boolean).length > 0;
+  if (!enabled) return '';
+  return `
+/**
+ * Request-scoped storage for inbound headers eligible for passthrough.
+ * The transports populate this per request; executeApiTool reads it.
+ */
+export const inboundHeaderStore = new AsyncLocalStorage<Record<string, string>>();
+`;
 }
 
 /**
@@ -280,7 +310,8 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
   // Insecure agent applied to the per-tool axios request config (issue #46).
   const insecureAgentToolConfig = options.insecure ? `\n      httpsAgent: insecureHttpsAgent,` : '';
 
-  // Custom auth hook invocation (issue #9).
+  // Custom auth hook invocation (issue #9). When the hook returns true, the
+  // built-in auth block below is skipped (guarded by !customAuthHandled).
   const customAuthCall = options.customAuth
     ? `
     // Custom auth hook (see src/auth.ts). Returning true short-circuits built-in auth.
@@ -290,9 +321,14 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
     }
 `
     : '';
+  // Built-in auth is wrapped in this guard so a custom hook can fully own auth.
+  const builtinAuthGuardOpen = options.customAuth ? '    if (!customAuthHandled) {\n' : '';
+  const builtinAuthGuardClose = options.customAuth ? '\n    }' : '';
 
-  // Header passthrough (issue #55): forward selected inbound headers, set on
-  // the request via a transport-provided global. No-op for stdio.
+  // Header passthrough (issue #55): forward selected inbound headers to the
+  // upstream API. Headers are read from request-scoped AsyncLocalStorage (set
+  // by the web/streamable-http transports), NOT a shared global, so concurrent
+  // requests cannot leak each other's credentials. No-op for stdio.
   const headerPassthroughNames = Array.isArray(options.headerPassthrough)
     ? options.headerPassthrough.filter(Boolean)
     : [];
@@ -301,7 +337,7 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
       ? `
     // Forward configured inbound headers to the upstream API (issue #55)
     const __passthroughHeaderNames = ${JSON.stringify(headerPassthroughNames.map((h) => h.toLowerCase()))};
-    const __inboundHeaders = (globalThis as any).__mcpInboundHeaders as Record<string, string> | undefined;
+    const __inboundHeaders = inboundHeaderStore.getStore();
     if (__inboundHeaders) {
         for (const __name of __passthroughHeaderNames) {
             const __val = __inboundHeaders[__name];
@@ -541,7 +577,7 @@ async function executeApiTool(
         requestBodyData = validatedArgs['requestBody'];
         headers['content-type'] = definition.requestBodyContentType;
     }
-${customAuthCall}${securityCode}
+${customAuthCall}${builtinAuthGuardOpen}${securityCode}${builtinAuthGuardClose}
 ${headerPassthroughCode}
     // Prepare the axios request configuration
     const config: AxiosRequestConfig = {

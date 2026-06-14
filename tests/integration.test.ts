@@ -108,7 +108,12 @@ describe('integration: generate + typecheck', () => {
     const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
     expect(indexTs).toContain("import * as https from 'https'");
     expect(indexTs).toContain("import { applyCustomAuth } from './auth.js'");
-    expect(indexTs).toContain('__mcpInboundHeaders');
+    // Header passthrough uses a request-scoped AsyncLocalStorage, not a global.
+    expect(indexTs).toContain("from 'async_hooks'");
+    expect(indexTs).toContain('inboundHeaderStore');
+    expect(indexTs).not.toContain('globalThis');
+    // Custom auth short-circuits built-in auth.
+    expect(indexTs).toContain('if (!customAuthHandled)');
     // auth.ts stub generated
     expect(fs.existsSync(path.join(out, 'src', 'auth.ts'))).toBe(true);
 
@@ -116,7 +121,20 @@ describe('integration: generate + typecheck', () => {
     expect(res.ok, res.output).toBe(true);
   });
 
-  it('rejects external $ref by default but allows with the flag', () => {
+  it('forwards request-scoped headers via AsyncLocalStorage in web transport', () => {
+    // Web transport deps (hono, etc.) aren't installed at the repo root, so we
+    // assert on the generated source shape rather than full type-checking it.
+    const out = path.join(workdir, 'web-passthrough');
+    generate(out, ['--transport', 'web', '--header-passthrough', 'X-API-Key']);
+    const webTs = fs.readFileSync(path.join(out, 'src', 'web-server.ts'), 'utf8');
+    expect(webTs).toContain("import { inboundHeaderStore } from './index.js'");
+    expect(webTs).toContain('inboundHeaderStore.run(');
+    expect(webTs).not.toContain('__mcpInboundHeaders');
+    const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
+    expect(indexTs).toContain('export const inboundHeaderStore');
+  });
+
+  it('rejects external $ref by default (SSRF guard)', () => {
     const badSpec = path.join(workdir, 'bad.json');
     fs.writeFileSync(
       badSpec,

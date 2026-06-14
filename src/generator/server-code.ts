@@ -10,6 +10,7 @@ import {
 import {
   generateExecuteApiToolFunction,
   getSecurityModuleImports,
+  getInboundHeaderStoreDeclaration,
   type SecurityCodeOptions,
 } from '../utils/security.js';
 
@@ -57,6 +58,10 @@ export function generateMcpServerCode(
 
   // Top-of-module imports required by the security/execution code
   const securityModuleImports = getSecurityModuleImports(securityOptions);
+
+  // Request-scoped inbound-header store declaration (issue #55). Empty unless
+  // header passthrough is enabled.
+  const inboundHeaderStoreDecl = getInboundHeaderStoreDeclaration(securityOptions);
 
   // Startup/cleanup wiring. In library mode (issue #50) we export main() and
   // leave lifecycle (signal handlers, invocation) to the importing application.
@@ -152,7 +157,7 @@ import {
 import { z, ZodError } from 'zod';
 import { jsonSchemaToZod } from 'json-schema-to-zod';
 import axios, { type AxiosRequestConfig, type AxiosError } from 'axios';
-${securityModuleImports}
+${securityModuleImports}${inboundHeaderStoreDecl}
 /**
  * Type definition for JSON objects
  */

@@ -8,7 +8,13 @@
  * @param port Server port (default: 3000)
  * @returns Generated code for the StreamableHTTP server
  */
-export function generateStreamableHttpCode(port: number = 3000): string {
+export function generateStreamableHttpCode(
+  port: number = 3000,
+  enableHeaderPassthrough: boolean = false
+): string {
+  const headerStoreImport = enableHeaderPassthrough
+    ? `\nimport { inboundHeaderStore } from './index.js';`
+    : '';
   return `
 /**
  * StreamableHTTP server setup for HTTP-based MCP communication using Hono
@@ -20,7 +26,7 @@ import { v4 as uuid } from 'uuid';
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { InitializeRequestSchema, JSONRPCError } from "@modelcontextprotocol/sdk/types.js";
-import { toReqRes, toFetchResponse } from 'fetch-to-node';
+import { toReqRes, toFetchResponse } from 'fetch-to-node';${headerStoreImport}
 
 // Import server configuration constants
 import { SERVER_NAME, SERVER_VERSION } from './index.js';
@@ -57,19 +63,26 @@ class MCPStreamableHttpServer {
   async handlePostRequest(c: any) {
     const sessionId = c.req.header(SESSION_ID_HEADER_NAME);
     console.error(\`POST request received \${sessionId ? 'with session ID: ' + sessionId : 'without session ID'}\`);
-
-    // Capture inbound headers so configured ones can be forwarded to the
-    // upstream API by executeApiTool (header passthrough, issue #55).
+${
+  enableHeaderPassthrough
+    ? `
+    // Capture inbound headers into request-scoped storage so configured ones can
+    // be forwarded to the upstream API by executeApiTool (header passthrough,
+    // issue #55). AsyncLocalStorage keeps this per-request — no cross-request leak.
+    const __inbound: Record<string, string> = {};
     try {
-      const inbound: Record<string, string> = {};
       for (const [k, v] of Object.entries(c.req.header())) {
-        if (typeof v === 'string') inbound[k.toLowerCase()] = v;
+        if (typeof v === 'string') __inbound[k.toLowerCase()] = v;
       }
-      (globalThis as any).__mcpInboundHeaders = inbound;
     } catch {
       // Non-fatal: passthrough simply won't apply if headers can't be read.
     }
+    return inboundHeaderStore.run(__inbound, () => this._handlePostRequest(c, sessionId));
+  }
 
+  async _handlePostRequest(c: any, sessionId: string | undefined) {`
+    : ''
+}
     try {
       const body = await c.req.json();
       
