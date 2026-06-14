@@ -97,14 +97,25 @@ so it is safe-by-default. (Adopts PR #41 intent.)
 ### #4 — Tool names over 64 chars (Claude Desktop limit)
 
 **Flag:** `--max-tool-name-length <n>` (default **64**). In
-`extractToolsFromApi`, after sanitizing, if `name.length > max`, truncate
-"Start…End" style: keep the head and tail, elide the middle with `__`, and
-append a short deterministic hash of the full name (`head__tail_hash`). This
-keeps the discriminating part visible for both prefix-collision names (tail
-differs) and suffix-collision names (head differs), while the hash guarantees
-uniqueness even when both ends match. Very small limits fall back to
-`head_hash`. The uniqueness set / collision loop remains as a backstop. Default
-64 changes output only for specs that were already broken in Claude Desktop.
+`extractToolsFromApi`, after sanitizing, `shortenToolName` keeps names within
+the limit:
+
+1. If `name.length <= max`, return unchanged (no behavior change for working
+   specs).
+2. Otherwise **word-abbreviate** (`abbreviateToolName`, inspired by
+   ToolUniverse): split on `_`/`-` and camelCase humps, keep the first word
+   (category/verb prefix), keep words `<= 3` chars, and shorten longer words to
+   their first 4 chars (`FDA_get_info_on_conditions_for_doctor_consultation_by_drug_name`
+   → `FDA_get_info_on_cond_for_doct_cons_by_drug_name`). Use this if it fits —
+   every word stays recognizable, no hash.
+3. If abbreviation still overflows, fall back to deterministic "Start…End" hash
+   truncation (`truncateToolName`): `head__tail_hash`, head-favored 60/40, with
+   a `head_hash` degenerate path for tiny limits.
+
+Collisions resolve via a content hash of the operationId (stable across spec
+reordering), not an order-dependent counter. `operationId` retains the original
+spec value regardless of how the tool name is shortened. Default 64 changes
+output only for specs that were already broken in Claude Desktop.
 
 ### #55 — Per-request API key via MCP headers (web / streamable-http)
 

@@ -36,12 +36,16 @@ security hole or a build-breaking bug.
 
 ### Added
 
-- `--max-tool-name-length <n>` (default 64): truncate generated tool names that
-  exceed the limit (Claude Desktop caps at 64). Truncation is "Start…End" style
-  — head and tail are both preserved with the middle elided (`head__tail`) and a
-  short deterministic hash appended — so prefix-collision names (e.g.
-  `createUserSubscriptionPaymentMethodWith…DefaultBillingAddress`) stay
-  distinguishable, while the hash guarantees uniqueness. (#4)
+- `--max-tool-name-length <n>` (default 64): keep generated tool names within
+  the limit (Claude Desktop caps at 64). Names that fit are left unchanged.
+  Over-limit names are first **word-abbreviated** (inspired by ToolUniverse):
+  the leading category/verb word is preserved, short words are kept, and longer
+  words are shortened to their first 4 characters
+  (`FDA_get_info_on_conditions_for_doctor_consultation_by_drug_name` →
+  `FDA_get_info_on_cond_for_doct_cons_by_drug_name`), keeping every word
+  recognizable. If abbreviation still overflows, it falls back to deterministic
+  "Start…End" hash truncation (`head__tail_hash`). Collisions resolve via a
+  content hash of the operationId — stable across spec reordering. (#4)
 - `--header-passthrough <names>`: forward selected inbound HTTP headers
   (web/streamable-http transports) onto the upstream API request, enabling
   per-user API keys via MCP client headers. (#55)

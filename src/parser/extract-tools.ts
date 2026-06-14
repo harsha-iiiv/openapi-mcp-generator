@@ -17,6 +17,75 @@ const HASH_LEN = 6;
 const ELISION_MARKER = '__';
 /** Fraction of the head/tail budget given to the head (front carries the verb/resource). */
 const HEAD_RATIO = 0.6;
+/** Words this length or shorter are kept intact during abbreviation. */
+const SHORT_WORD_MAX = 3;
+/** Longer words are abbreviated to this many leading characters. */
+const ABBREV_WORD_LEN = 4;
+
+/**
+ * Split a tool name into words on `_`/`-` boundaries and camelCase humps,
+ * preserving each word's original casing so it can be rejoined.
+ *
+ * `FDA_get_info_on_conditions` -> ['FDA','get','info','on','conditions']
+ * `createUserSubscriptionMethod` -> ['create','User','Subscription','Method']
+ */
+export function splitNameIntoWords(name: string): string[] {
+  return name
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .flatMap(
+      (segment) =>
+        // Split camelCase / PascalCase, and digit boundaries, into separate words.
+        segment.match(/[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+/g) ?? [segment]
+    );
+}
+
+/**
+ * Abbreviate a tool name word-by-word (inspired by ToolUniverse): keep the
+ * first word (category/verb prefix) intact, then for each subsequent word keep
+ * short words (<= 3 chars) as-is and shorten longer words to their first 4
+ * characters. Words are rejoined with `_`.
+ *
+ * `FDA_get_info_on_conditions_for_doctor_consultation_by_drug_name`
+ *   -> `FDA_get_info_on_cond_for_doct_cons_by_drug_name`
+ *
+ * Readability-preserving but NOT length-guaranteed (a name with very many words
+ * can still exceed the limit), so callers must apply a hard backstop.
+ */
+export function abbreviateToolName(name: string): string {
+  const words = splitNameIntoWords(name);
+  if (words.length <= 1) return name;
+  return words
+    .map((word, i) => {
+      if (i === 0) return word; // preserve the category/verb prefix
+      if (word.length <= SHORT_WORD_MAX) return word;
+      return word.slice(0, ABBREV_WORD_LEN);
+    })
+    .join('_');
+}
+
+/**
+ * Produce an MCP-compliant tool name within `maxLength` (issue #4).
+ *
+ * Strategy:
+ *  1. If the name already fits, return it unchanged.
+ *  2. Try word-level abbreviation (readable, no hash). If that fits, use it.
+ *  3. Otherwise fall back to deterministic Start…End hash truncation.
+ *
+ * @param name Sanitized candidate tool name
+ * @param maxLength Maximum allowed length
+ * @returns A name guaranteed to be <= maxLength
+ */
+export function shortenToolName(name: string, maxLength: number): string {
+  if (maxLength <= 0 || name.length <= maxLength) return name;
+  const abbreviated = abbreviateToolName(name);
+  if (abbreviated.length <= maxLength && abbreviated !== name) {
+    return abbreviated;
+  }
+  // Abbreviation alone wasn't enough — hash-truncate the (already abbreviated)
+  // name so distinct long names still collapse to unique, stable identifiers.
+  return truncateToolName(abbreviated.length < name.length ? abbreviated : name, maxLength);
+}
 
 /**
  * Truncate a tool name to `maxLength` when it exceeds the limit.
@@ -136,17 +205,24 @@ export function extractToolsFromApi(
       if (!originalOperationId) continue;
 
       // Sanitize the name to be MCP-compatible (only a-z, 0-9, _, -)
-      let baseName = originalOperationId.replace(/\./g, '_').replace(/[^a-z0-9_-]/gi, '_');
+      const sanitized = originalOperationId.replace(/\./g, '_').replace(/[^a-z0-9_-]/gi, '_');
 
-      // Enforce the maximum tool name length (Claude Desktop limit is 64).
-      baseName = truncateToolName(baseName, maxToolNameLength);
+      // Shorten to fit the limit: word-abbreviate first, hash-truncate as backstop.
+      const baseName = shortenToolName(sanitized, maxToolNameLength);
 
+      // Resolve collisions deterministically. Use a content hash of the
+      // original operationId (stable across spec reordering) rather than an
+      // order-dependent counter, re-shortened to stay within the limit.
       let finalToolName = baseName;
-      let counter = 1;
+      let attempt = 0;
       while (usedNames.has(finalToolName)) {
-        const candidate = `${baseName}_${counter++}`;
-        // Keep collision-resolved names within the limit too.
-        finalToolName = truncateToolName(candidate, maxToolNameLength);
+        const disambiguator = createHash('sha1')
+          .update(`${sanitized}#${attempt++}`)
+          .digest('hex')
+          .slice(0, HASH_LEN);
+        const suffix = `_${disambiguator}`;
+        const headRoom = Math.max(1, maxToolNameLength - suffix.length);
+        finalToolName = `${baseName.slice(0, headRoom)}${suffix}`;
       }
       usedNames.add(finalToolName);
 

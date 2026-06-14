@@ -12,7 +12,13 @@ import {
   ExternalRefError,
   parseSpecSecurely,
 } from '../src/utils/parser-security.js';
-import { extractToolsFromApi, truncateToolName } from '../src/parser/extract-tools.js';
+import {
+  extractToolsFromApi,
+  truncateToolName,
+  shortenToolName,
+  abbreviateToolName,
+  splitNameIntoWords,
+} from '../src/parser/extract-tools.js';
 import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
 import {
   generateOAuth2TokenAcquisitionCode,
@@ -179,6 +185,61 @@ describe('#4 tool name truncation', () => {
     // Tool name is truncated for MCP, but operationId stays the original spec value.
     expect(tool.name.length).toBeLessThanOrEqual(64);
     expect(tool.operationId).toBe(longId);
+  });
+});
+
+// --- #4: word-level abbreviation --------------------------------------------
+
+describe('#4 word-level name abbreviation', () => {
+  it('splits snake_case, kebab-case and camelCase into words', () => {
+    expect(splitNameIntoWords('FDA_get_info_on_conditions')).toEqual([
+      'FDA',
+      'get',
+      'info',
+      'on',
+      'conditions',
+    ]);
+    expect(splitNameIntoWords('createUserSubscriptionMethod')).toEqual([
+      'create',
+      'User',
+      'Subscription',
+      'Method',
+    ]);
+    expect(splitNameIntoWords('get-drug-info')).toEqual(['get', 'drug', 'info']);
+  });
+
+  it('keeps the first word, keeps short words, shortens long words to 4 chars', () => {
+    // Mirrors the ToolUniverse reference example.
+    expect(
+      abbreviateToolName('FDA_get_info_on_conditions_for_doctor_consultation_by_drug_name')
+    ).toBe('FDA_get_info_on_cond_for_doct_cons_by_drug_name');
+    expect(abbreviateToolName('euhealthinfo_search_diabetes_mellitus_epidemiology_registry')).toBe(
+      'euhealthinfo_sear_diab_mell_epid_regi'
+    );
+  });
+
+  it('shortenToolName abbreviates when over the limit and fits the result', () => {
+    const name = 'createUserAccountSubscriptionPaymentMethodConfigurationWithBillingAddressDetails';
+    expect(name.length).toBeGreaterThan(64);
+    const out = shortenToolName(name, 64);
+    expect(out.length).toBeLessThanOrEqual(64);
+    // Words remain individually recognizable (no opaque hash needed here).
+    expect(out).toContain('create');
+    expect(out).toMatch(/^[a-zA-Z0-9_-]+$/);
+  });
+
+  it('shortenToolName leaves names that already fit unchanged', () => {
+    const name = 'FDA_get_info_on_conditions_for_doctor_consultation_by_drug_name'; // 63 chars
+    expect(name.length).toBeLessThanOrEqual(64);
+    expect(shortenToolName(name, 64)).toBe(name);
+  });
+
+  it('shortenToolName falls back to hash truncation when abbreviation still overflows', () => {
+    // Many long words: even abbreviated to 4 chars each, exceeds a tight limit.
+    const name = Array.from({ length: 20 }, (_, i) => `segment${i}xxxxxxxx`).join('_');
+    const out = shortenToolName(name, 64);
+    expect(out.length).toBeLessThanOrEqual(64);
+    expect(out).toMatch(/^[a-zA-Z0-9_-]+$/);
   });
 });
 
