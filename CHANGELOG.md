@@ -37,8 +37,11 @@ security hole or a build-breaking bug.
 ### Added
 
 - `--max-tool-name-length <n>` (default 64): truncate generated tool names that
-  exceed the limit (Claude Desktop caps at 64), with a deterministic hash suffix
-  to keep names unique. (#4)
+  exceed the limit (Claude Desktop caps at 64). Truncation is "Start…End" style
+  — head and tail are both preserved with the middle elided (`head__tail`) and a
+  short deterministic hash appended — so prefix-collision names (e.g.
+  `createUserSubscriptionPaymentMethodWith…DefaultBillingAddress`) stay
+  distinguishable, while the hash guarantees uniqueness. (#4)
 - `--header-passthrough <names>`: forward selected inbound HTTP headers
   (web/streamable-http transports) onto the upstream API request, enabling
   per-user API keys via MCP client headers. (#55)

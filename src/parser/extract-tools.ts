@@ -11,18 +11,53 @@ import { shouldIncludeOperationForMcp } from '../utils/helpers.js';
 /** Default maximum tool name length (Claude Desktop limit). */
 export const DEFAULT_MAX_TOOL_NAME_LENGTH = 64;
 
+/** Length of the deterministic hex hash segment appended for uniqueness. */
+const HASH_LEN = 6;
+/** Marker inserted where the middle of a name is elided: `head__tail`. */
+const ELISION_MARKER = '__';
+/** Fraction of the head/tail budget given to the head (front carries the verb/resource). */
+const HEAD_RATIO = 0.6;
+
 /**
- * Truncate a tool name to `maxLength`, appending a short deterministic hash
- * suffix when truncation occurs so distinct long names stay unique and stable
- * across runs. Returns the name unchanged when already within the limit.
+ * Truncate a tool name to `maxLength` when it exceeds the limit.
+ *
+ * Strategy (issue #4): names are truncated "Start…End" style — the head and
+ * the tail are both preserved and the middle is elided with `__` — followed by
+ * a short deterministic hash of the *full* name. This keeps tool names readable
+ * for the model in both common collision shapes (prefix collisions like
+ * `createUserSubscriptionPaymentMethodWith...` where the tail disambiguates,
+ * and suffix collisions like `getUserById`/`getOrderById` where the head does),
+ * while the hash guarantees uniqueness even when both ends match. The hash is
+ * computed over the original name, so output is stable across runs and spec
+ * reordering.
+ *
+ * For very small limits there isn't room for two ends plus a marker plus a
+ * hash, so it falls back to `head_hash`.
+ *
+ * Returns the name unchanged when already within the limit.
  */
 export function truncateToolName(name: string, maxLength: number): string {
   if (maxLength <= 0 || name.length <= maxLength) return name;
-  const hash = createHash('sha1').update(name).digest('hex').slice(0, 6);
-  const suffix = `_${hash}`;
-  // Reserve room for the suffix; guard against tiny limits.
-  const headLength = Math.max(1, maxLength - suffix.length);
-  return `${name.slice(0, headLength)}${suffix}`.slice(0, maxLength);
+
+  const hash = createHash('sha1').update(name).digest('hex').slice(0, HASH_LEN);
+  const hashSuffix = `_${hash}`; // separator + hash
+
+  // Budget left for the visible name once the hash is reserved.
+  const nameBudget = maxLength - hashSuffix.length;
+
+  // Need at least 2 chars per end plus the marker to make Start…End meaningful;
+  // otherwise degrade to head + hash.
+  const headTailBudget = nameBudget - ELISION_MARKER.length;
+  if (headTailBudget < 4) {
+    const headLength = Math.max(1, nameBudget);
+    return `${name.slice(0, headLength)}${hashSuffix}`.slice(0, maxLength);
+  }
+
+  const headLength = Math.ceil(headTailBudget * HEAD_RATIO);
+  const tailLength = headTailBudget - headLength;
+  const head = name.slice(0, headLength);
+  const tail = tailLength > 0 ? name.slice(name.length - tailLength) : '';
+  return `${head}${ELISION_MARKER}${tail}${hashSuffix}`.slice(0, maxLength);
 }
 
 /**

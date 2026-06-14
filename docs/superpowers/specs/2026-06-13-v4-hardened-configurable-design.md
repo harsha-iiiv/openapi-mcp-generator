@@ -97,10 +97,14 @@ so it is safe-by-default. (Adopts PR #41 intent.)
 ### #4 — Tool names over 64 chars (Claude Desktop limit)
 
 **Flag:** `--max-tool-name-length <n>` (default **64**). In
-`extractToolsFromApi`, after sanitizing, if `name.length > max`, truncate to
-`max` chars; on truncation/collision append a short deterministic hash suffix
-within the limit. Uniqueness set already exists. Default 64 changes output only
-for specs that were already broken in Claude Desktop.
+`extractToolsFromApi`, after sanitizing, if `name.length > max`, truncate
+"Start…End" style: keep the head and tail, elide the middle with `__`, and
+append a short deterministic hash of the full name (`head__tail_hash`). This
+keeps the discriminating part visible for both prefix-collision names (tail
+differs) and suffix-collision names (head differs), while the hash guarantees
+uniqueness even when both ends match. Very small limits fall back to
+`head_hash`. The uniqueness set / collision loop remains as a backstop. Default
+64 changes output only for specs that were already broken in Claude Desktop.
 
 ### #55 — Per-request API key via MCP headers (web / streamable-http)
 

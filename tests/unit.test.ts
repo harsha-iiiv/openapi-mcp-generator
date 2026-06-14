@@ -104,6 +104,8 @@ describe('#4 tool name truncation', () => {
     const out = truncateToolName(long, 64);
     expect(out.length).toBeLessThanOrEqual(64);
     expect(out).not.toBe(long);
+    // Result stays within the MCP-allowed character set.
+    expect(out).toMatch(/^[a-zA-Z0-9_-]+$/);
   });
 
   it('is deterministic and unique across distinct inputs', () => {
@@ -111,6 +113,43 @@ describe('#4 tool name truncation', () => {
     const b = truncateToolName('x'.repeat(80) + '_beta', 64);
     expect(a).toBe(truncateToolName('x'.repeat(80) + '_alpha', 64));
     expect(a).not.toBe(b);
+  });
+
+  it('preserves both head and tail (Start…End) so prefix-collisions stay distinguishable', () => {
+    // Names long enough to force truncation (> 64), sharing a long prefix and
+    // differing only in the tail — the common REST prefix-collision shape.
+    const a = truncateToolName(
+      'createUserAccountSubscriptionPaymentMethodConfigurationWithDefaultBillingAddress',
+      64
+    );
+    const b = truncateToolName(
+      'createUserAccountSubscriptionPaymentMethodConfigurationWithAlternateBillingAddress',
+      64
+    );
+    expect(a.length).toBeLessThanOrEqual(64);
+    expect(b.length).toBeLessThanOrEqual(64);
+    // Shared head is kept...
+    expect(a.startsWith('createUserAccountSubscription')).toBe(true);
+    // ...and the distinguishing tail is kept (not replaced by an opaque hash only).
+    expect(a).toContain('BillingAddress');
+    expect(b).toContain('BillingAddress');
+    // Middle elided with the marker, and the two remain distinct.
+    expect(a).toContain('__');
+    expect(a).not.toBe(b);
+  });
+
+  it('keeps the tail for suffix-collisions via the head (getXById family)', () => {
+    // These are short enough to be unchanged, documenting the non-truncated path.
+    expect(truncateToolName('getUserById', 64)).toBe('getUserById');
+    expect(truncateToolName('getOrderById', 64)).toBe('getOrderById');
+  });
+
+  it('falls back to head+hash when the limit is too small for two ends', () => {
+    const out = truncateToolName('x'.repeat(40), 12);
+    expect(out.length).toBeLessThanOrEqual(12);
+    expect(out).toMatch(/^[a-zA-Z0-9_-]+$/);
+    // No elision marker when there is no room for a meaningful tail.
+    expect(out).not.toContain('__');
   });
 
   it('applies during extraction and keeps names unique', () => {
