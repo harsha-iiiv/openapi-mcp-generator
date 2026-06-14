@@ -3,6 +3,7 @@
  * Run with: npm test
  */
 import { describe, it, expect } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { OpenAPIV3 } from 'openapi-types';
 
 import { sanitizeForTemplate } from '../src/utils/helpers.js';
@@ -126,6 +127,17 @@ describe('#68 external $ref SSRF guard', () => {
     const result = await parseSpecSecurely(doc, false);
     expect(result.openapi).toBe('3.0.0');
     expect(result.paths?.['/x']).toBeDefined();
+  });
+
+  it('parses a spec from a path/URL-style string input under the default guard', async () => {
+    // Regression: the SSRF guard must not block loading the user-supplied input
+    // itself (a file path or http(s) URL). Only embedded external $refs are
+    // rejected. Previously `resolve: { http: false }` blocked fetching a URL
+    // input outright, breaking `-i https://.../openapi.json`.
+    const fixture = new URL('./fixtures/sample-api.json', import.meta.url);
+    const result = await parseSpecSecurely(fileURLToPath(fixture), false);
+    expect(result.openapi).toBeDefined();
+    expect(Object.keys(result.paths ?? {}).length).toBeGreaterThan(0);
   });
 });
 

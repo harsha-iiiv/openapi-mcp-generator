@@ -78,9 +78,14 @@ export function assertNoExternalRefs(node: unknown, seen: WeakSet<object> = new 
 /**
  * Parse and dereference an OpenAPI spec with optional SSRF protection.
  *
- * When `allowExternalRefs` is false (the default), the spec is first parsed
- * without resolving external references, scanned for external http(s) refs,
- * and only then dereferenced with the http resolver disabled.
+ * The SSRF protection targets external `$ref`s embedded *inside* the spec, not
+ * the user-supplied input itself: a URL passed as the input is trusted (the
+ * user typed it) and must still be fetched. So when `allowExternalRefs` is
+ * false (the default) we:
+ *   1. Parse the input normally (the entry document — a URL input is fetched).
+ *   2. Scan the parsed tree and reject any external http(s) `$ref`.
+ *   3. Dereference the already-loaded object with the http resolver disabled —
+ *      safe because step 2 guaranteed no external refs remain to follow.
  *
  * @param input Path, URL, or pre-parsed document
  * @param allowExternalRefs Permit external http(s) `$ref` resolution
@@ -97,16 +102,17 @@ export async function parseSpecSecurely(
     return (await SwaggerParser.dereference(apiInput)) as OpenAPIV3.Document;
   }
 
-  // Resolve local + internal refs only; never follow http(s).
-  const resolverOptions = {
-    resolve: {
-      http: false as const,
-    },
-  };
+  // 1. Parse/fetch the entry document (http allowed so a URL input still loads),
+  //    without dereferencing, so we can inspect raw $ref values first.
+  const parsed = (await SwaggerParser.parse(apiInput)) as OpenAPIV3.Document;
 
-  // Parse without dereferencing so we can inspect raw $ref values first.
-  const parsed = (await SwaggerParser.parse(apiInput, resolverOptions)) as OpenAPIV3.Document;
+  // 2. Reject any external http(s) $ref embedded in the spec (SSRF guard).
   assertNoExternalRefs(parsed);
 
-  return (await SwaggerParser.dereference(apiInput, resolverOptions)) as OpenAPIV3.Document;
+  // 3. Dereference the already-loaded object with http disabled. No external
+  //    refs remain after the scan, so only local/internal refs are resolved and
+  //    nothing reaches out over the network.
+  return (await SwaggerParser.dereference(parsed, {
+    resolve: { http: false },
+  })) as OpenAPIV3.Document;
 }
