@@ -185,7 +185,7 @@ interface GetToolsOptions {
 
 ## Testing
 
-Unit tests (Jest) per fix:
+Unit tests (Vitest) per fix:
 
 - `sanitizeForTemplate` escapes `${`, backticks, backslashes (#67)
 - external-ref spec is rejected when `allowExternalRefs` is false (#68)

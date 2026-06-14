@@ -92,12 +92,16 @@ export function extractToolsFromApi(
         }
       }
 
-      // Generate a unique name for the tool
-      let baseName = operation.operationId || generateOperationId(method, path);
-      if (!baseName) continue;
+      // Generate a unique name for the tool.
+      // Preserve the original operationId (or generated fallback) separately so
+      // tool.operationId stays stable for callers that filter on it, e.g.
+      // getToolsFromOpenApi({ excludeOperationIds }) — independent of the
+      // sanitization/truncation applied to the MCP-facing tool name.
+      const originalOperationId = operation.operationId || generateOperationId(method, path);
+      if (!originalOperationId) continue;
 
       // Sanitize the name to be MCP-compatible (only a-z, 0-9, _, -)
-      baseName = baseName.replace(/\./g, '_').replace(/[^a-z0-9_-]/gi, '_');
+      let baseName = originalOperationId.replace(/\./g, '_').replace(/[^a-z0-9_-]/gi, '_');
 
       // Enforce the maximum tool name length (Claude Desktop limit is 64).
       baseName = truncateToolName(baseName, maxToolNameLength);
@@ -143,7 +147,7 @@ export function extractToolsFromApi(
         executionParameters,
         requestBodyContentType,
         securityRequirements,
-        operationId: baseName,
+        operationId: originalOperationId,
         tags,
         deprecated,
       });

@@ -10,6 +10,7 @@ import {
   assertNoExternalRefs,
   isExternalHttpRef,
   ExternalRefError,
+  parseSpecSecurely,
 } from '../src/utils/parser-security.js';
 import { extractToolsFromApi, truncateToolName } from '../src/parser/extract-tools.js';
 import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
@@ -76,6 +77,19 @@ describe('#68 external $ref SSRF guard', () => {
     a.self = a;
     expect(() => assertNoExternalRefs(a)).not.toThrow();
   });
+
+  it('accepts a pre-parsed OpenAPI document (not just a path/URL string)', async () => {
+    const doc = {
+      openapi: '3.0.0',
+      info: { title: 't', version: '1' },
+      paths: {
+        '/x': { get: { operationId: 'getX', responses: { '200': { description: 'ok' } } } },
+      },
+    } as unknown as OpenAPIV3.Document;
+    const result = await parseSpecSecurely(doc, false);
+    expect(result.openapi).toBe('3.0.0');
+    expect(result.paths?.['/x']).toBeDefined();
+  });
 });
 
 // --- #4: tool name truncation ------------------------------------------------
@@ -113,6 +127,19 @@ describe('#4 tool name truncation', () => {
     expect(tools).toHaveLength(2);
     for (const t of tools) expect(t.name.length).toBeLessThanOrEqual(64);
     expect(tools[0].name).not.toBe(tools[1].name);
+  });
+
+  it('preserves the original operationId even when the tool name is truncated', () => {
+    const longId = 'getSomethingWith' + 'X'.repeat(80);
+    const api: OpenAPIV3.Document = {
+      openapi: '3.0.0',
+      info: { title: 't', version: '1' },
+      paths: { '/a': { get: { operationId: longId, responses: {} } } },
+    };
+    const [tool] = extractToolsFromApi(api, true, 64);
+    // Tool name is truncated for MCP, but operationId stays the original spec value.
+    expect(tool.name.length).toBeLessThanOrEqual(64);
+    expect(tool.operationId).toBe(longId);
   });
 });
 

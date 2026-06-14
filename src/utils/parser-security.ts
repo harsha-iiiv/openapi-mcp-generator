@@ -66,8 +66,11 @@ export async function parseSpecSecurely(
   input: string | OpenAPIV3.Document,
   allowExternalRefs: boolean
 ): Promise<OpenAPIV3.Document> {
+  // SwaggerParser accepts a path/URL string OR a pre-parsed API object.
+  const apiInput = input as Parameters<typeof SwaggerParser.dereference>[0];
+
   if (allowExternalRefs) {
-    return (await SwaggerParser.dereference(input as string)) as OpenAPIV3.Document;
+    return (await SwaggerParser.dereference(apiInput)) as OpenAPIV3.Document;
   }
 
   // Resolve local + internal refs only; never follow http(s).
@@ -78,11 +81,8 @@ export async function parseSpecSecurely(
   };
 
   // Parse without dereferencing so we can inspect raw $ref values first.
-  const parsed = (await SwaggerParser.parse(
-    input as string,
-    resolverOptions
-  )) as OpenAPIV3.Document;
+  const parsed = (await SwaggerParser.parse(apiInput, resolverOptions)) as OpenAPIV3.Document;
   assertNoExternalRefs(parsed);
 
-  return (await SwaggerParser.dereference(input as string, resolverOptions)) as OpenAPIV3.Document;
+  return (await SwaggerParser.dereference(apiInput, resolverOptions)) as OpenAPIV3.Document;
 }
