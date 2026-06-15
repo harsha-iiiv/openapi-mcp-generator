@@ -48,3 +48,6 @@ Thumbs.db
 .eslintcache
 # Test scratch output
 .test-tmp-*/
+
+# Visual brainstorming companion (superpowers)
+.superpowers/
