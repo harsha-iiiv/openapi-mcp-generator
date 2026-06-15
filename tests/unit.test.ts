@@ -29,6 +29,7 @@ import {
   generateHttpSecurityCode,
 } from '../src/utils/security.js';
 import { generateMcpServerCode, generateCustomAuthStub } from '../src/generator/server-code.js';
+import { generateCloudflareWorkerFiles } from '../src/generator/cloudflare-worker.js';
 import type { McpToolDefinition } from '../src/types/index.js';
 
 // --- #67: template-literal injection ---------------------------------------
@@ -500,5 +501,34 @@ describe('generated tool definition map shape', () => {
     expect(code).toContain('pathTemplate: "/x"');
     expect(code).toContain('tags: ["t"]');
     expect(code).toContain('deprecated: false');
+  });
+});
+
+// --- cloudflare-worker target ----------------------------------------------
+
+describe('cloudflare-worker target', () => {
+  it('exposes a generator that returns the expected file set', () => {
+    const files = generateCloudflareWorkerFiles(
+      // minimal stub: empty tools, name/version
+      {
+        tools: [],
+        serverName: 'test-mcp',
+        serverVersion: '0.1.0',
+        securitySchemes: undefined,
+        baseUrl: 'https://api.example.com',
+      }
+    );
+    const paths = files.map((f) => f.path).sort();
+    expect(paths).toEqual(
+      [
+        '.dev.vars.example',
+        'README.md',
+        'package.json',
+        'src/index.ts',
+        'src/tools.ts',
+        'tsconfig.json',
+        'wrangler.jsonc',
+      ].sort()
+    );
   });
 });
