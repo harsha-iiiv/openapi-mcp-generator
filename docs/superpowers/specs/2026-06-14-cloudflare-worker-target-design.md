@@ -78,35 +78,37 @@ via `eval(jsonSchemaToZod(schema))` and use Node `https`. Workers forbid `eval` 
 
 ### Generated `src/index.ts` (shape)
 
+Verified against the Cloudflare handler-api docs. `createMcpHandler(server, options?)`
+takes an `McpServer` you construct yourself; tools are registered on it via
+`server.tool(name, description, zodShape, handler)`.
+
 ```ts
 import { createMcpHandler } from "agents/mcp";
-import { toolDefinitionMap, type McpToolDefinition } from "./tools.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolDefinitionMap } from "./tools.js";
 
 const SERVER_NAME = "<server-name>";
 const SERVER_VERSION = "<server-version>";
 
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const handler = createMcpHandler(
-      { name: SERVER_NAME, version: SERVER_VERSION },
-      (server) => {
-        for (const [name, def] of toolDefinitionMap) {
-          server.tool(name, def.description, def.zodShape, (args) =>
-            executeApiTool(def, args, env)
-          );
-        }
-      },
-      { route: "/mcp" }
+function createServer(env: Env): McpServer {
+  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  for (const [name, def] of toolDefinitionMap) {
+    server.tool(name, def.description, def.zodShape, (args) =>
+      executeApiTool(def, args, env)
     );
-    return handler(request, env, ctx);
-  },
-};
+  }
+  return server;
+}
+
+export default {
+  fetch: (request: Request, env: Env, ctx: ExecutionContext) =>
+    createMcpHandler(createServer(env), { route: "/mcp" })(request, env, ctx),
+} satisfies ExportedHandler<Env>;
 ```
 
-> Implementation note: the exact `createMcpHandler` import path and signature must be
-> confirmed against the installed `agents` SDK version during implementation (verify via
-> Context7 / the package's types). The shape above reflects the Cloudflare guide; the
-> plan's first step is to pin the SDK version and confirm the API.
+> Verified signature: `import { createMcpHandler } from "agents/mcp"` and
+> `import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"`. `route` defaults
+> to `/mcp`. The `def.zodShape` is the build-time-emitted zod shape object (see Validation).
 
 ### Validation — no runtime `eval`
 
@@ -185,9 +187,15 @@ This mirrors the existing `.env` split in the Node targets.
 - CHANGELOG: `Added` entry under `[4.1.0]`.
 - `--transport` help text lists the new value.
 
-## Open implementation questions (resolve during planning, not blocking the spec)
+## Resolved implementation questions
 
-1. Exact `createMcpHandler` import path/signature in the pinned `agents` SDK version —
-   confirm before writing the template.
-2. Whether `wrangler deploy --dry-run` runs in the project's CI environment offline; if
-   not, the integration test falls back to `tsc --noEmit`.
+1. **`createMcpHandler` signature — RESOLVED.** Verified against Cloudflare's handler-api
+   docs: `createMcpHandler(server: McpServer, options?: CreateMcpHandlerOptions)` returns
+   `(request, env, ctx) => Promise<Response>`. Import `createMcpHandler` from `agents/mcp`
+   and `McpServer` from `@modelcontextprotocol/sdk/server/mcp.js`. Tools register via
+   `server.tool(name, description, zodShape, handler)`. `route` defaults to `/mcp`. See the
+   `src/index.ts` shape above.
+2. **CI `wrangler --dry-run` — RESOLVED by design.** The integration test attempts
+   `wrangler deploy --dry-run` and falls back to `tsc --noEmit` if wrangler can't run
+   offline, so the test is robust either way; no further investigation needed before
+   implementation.
