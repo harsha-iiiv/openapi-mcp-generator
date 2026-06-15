@@ -294,7 +294,8 @@ async function applyAuth(
           url.searchParams.set(paramName, key);
         } else if (scheme.in === 'cookie') {
           const existing = headers['cookie'];
-          headers['cookie'] = (existing ? existing + '; ' : '') + paramName + '=' + key;
+          const cookiePair = paramName + '=' + encodeURIComponent(key);
+          headers['cookie'] = (existing ? existing + '; ' : '') + cookiePair;
         } else {
           // 'header' or unknown placement.
           headers[paramName.toLowerCase()] = key;
@@ -304,7 +305,7 @@ async function applyAuth(
 
       if (scheme.type === 'http' && scheme.scheme === 'basic') {
         const user = env[\`\${upper}_USERNAME\`] ?? env.API_USERNAME;
-        if (user == null) continue;
+        if (!user) continue;
         const pass = env[\`\${upper}_PASSWORD\`] ?? env.API_PASSWORD ?? '';
         headers['authorization'] = 'Basic ' + btoa(\`\${user}:\${pass}\`);
         return;
@@ -453,14 +454,27 @@ export function generateWorkerTsconfig(): string {
 }
 
 export function generateWorkerReadme(input: CloudflareWorkerGenInput): string {
-  const schemes = Object.keys(input.securitySchemes ?? {});
+  const schemeMap = input.securitySchemes ?? {};
+  const schemes = Object.keys(schemeMap);
   const secretLines =
     schemes.length === 0
       ? '   (This API declares no security schemes — add any secrets your API needs.)'
       : schemes
           .map((n) => {
             const upper = n.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-            return `   npx wrangler secret put ${upper}_API_KEY   # or _TOKEN / _USERNAME+_PASSWORD`;
+            const scheme = schemeMap[n] as OpenAPIV3.SecuritySchemeObject;
+            // Emit the secret name(s) that match this scheme's type so the deploy
+            // hint stays in sync with .dev.vars.example.
+            if (scheme && 'type' in scheme && scheme.type === 'oauth2') {
+              return `   npx wrangler secret put ${upper}_CLIENT_ID\n   npx wrangler secret put ${upper}_CLIENT_SECRET`;
+            }
+            if (scheme && 'type' in scheme && scheme.type === 'http' && scheme.scheme === 'basic') {
+              return `   npx wrangler secret put ${upper}_USERNAME\n   npx wrangler secret put ${upper}_PASSWORD`;
+            }
+            if (scheme && 'type' in scheme && scheme.type === 'http') {
+              return `   npx wrangler secret put ${upper}_TOKEN`;
+            }
+            return `   npx wrangler secret put ${upper}_API_KEY`;
           })
           .join('\n');
   return `# ${input.serverName}
