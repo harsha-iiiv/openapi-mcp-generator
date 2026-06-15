@@ -242,12 +242,21 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         options.maxToolNameLength ?? 64
       );
       const resolvedBaseUrl = determineBaseUrl(api, options.baseUrl) || '';
-      // Workers' fetch needs an absolute upstream URL. Many specs declare a
-      // relative server (e.g. "/api/v3"); warn now so the user sets an absolute
-      // API_BASE_URL before deploying rather than hitting a runtime error.
+      // Workers' fetch needs an absolute upstream URL.
+      // - No base URL at all (no spec `servers`, no --base-url): unrecoverable
+      //   without more input, so fail fast rather than emit a broken Worker.
+      // - A relative base URL (e.g. the spec's server is "/api/v3"): still
+      //   deployable once the user sets an absolute API_BASE_URL, so warn but
+      //   proceed (and the generated Worker guards it at runtime too).
+      if (!resolvedBaseUrl) {
+        throw new Error(
+          'Unable to determine an API base URL for --transport cloudflare-worker. ' +
+            'The spec has no usable `servers` entry — pass --base-url https://host/path.'
+        );
+      }
       if (!/^https?:\/\//i.test(resolvedBaseUrl)) {
         console.error(
-          `Warning: the resolved API base URL "${resolvedBaseUrl || '(none)'}" is not absolute. ` +
+          `Warning: the resolved API base URL "${resolvedBaseUrl}" is not absolute. ` +
             `The generated Worker needs an absolute upstream URL — pass --base-url ` +
             `https://host/path, or set API_BASE_URL in wrangler.jsonc / via "wrangler secret put" ` +
             `before deploying.`

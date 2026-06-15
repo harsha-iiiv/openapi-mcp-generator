@@ -29,7 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     warns at generation time, and the generated Worker returns an actionable MCP
     error (asking for an absolute `API_BASE_URL`) instead of a cryptic "Invalid
     URL string" — the Workers `fetch` runtime requires an absolute upstream URL.
-    Pass `--base-url https://host/path` to bake one in.
+    Pass `--base-url https://host/path` to bake one in. Generation fails fast
+    when no base URL can be resolved at all.
+  - The generated project now includes a `.gitignore` that excludes `.dev.vars`
+    (local secrets), `node_modules/`, `.wrangler/`, and `dist/`.
+  - HTTP auth scheme names are normalized case-insensitively, so a spec written
+    as `"Basic"`/`"Bearer"` is handled correctly (RFC 7235).
+  - The generated `README.md` documents that the Worker is public by default and
+    how to add authentication (Cloudflare Access, OAuth, or a shared token).
 
 ## [4.0.1] - 2026-06-14
 

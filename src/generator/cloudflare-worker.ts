@@ -37,10 +37,28 @@ export function generateCloudflareWorkerFiles(input: CloudflareWorkerGenInput): 
     { path: 'src/tools.ts', content: generateWorkerToolsFile(input) },
     { path: 'wrangler.jsonc', content: generateWranglerConfig(input) },
     { path: '.dev.vars.example', content: generateDevVarsExample(input) },
+    { path: '.gitignore', content: generateWorkerGitignore() },
     { path: 'package.json', content: generateWorkerPackageJson(input) },
     { path: 'tsconfig.json', content: generateWorkerTsconfig() },
     { path: 'README.md', content: generateWorkerReadme(input) },
   ];
+}
+
+/**
+ * .gitignore for the generated Worker. Excludes local secrets (`.dev.vars`),
+ * build/runtime artifacts, and dependencies so a freshly generated project can
+ * be committed without leaking credentials.
+ */
+export function generateWorkerGitignore(): string {
+  return `node_modules/
+.wrangler/
+dist/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+*.log
+.DS_Store
+`;
 }
 
 /**
@@ -144,7 +162,10 @@ function buildRuntimeSecuritySchemes(
     if (scheme.type === 'apiKey') {
       map[name] = { type: 'apiKey', in: scheme.in, name: scheme.name };
     } else if (scheme.type === 'http') {
-      map[name] = { type: 'http', scheme: scheme.scheme };
+      // Normalize the scheme name (HTTP auth schemes are case-insensitive per
+      // RFC 7235) so the generated runtime's `=== 'basic'` check matches specs
+      // that write "Basic"/"Bearer".
+      map[name] = { type: 'http', scheme: scheme.scheme?.toLowerCase() };
     } else if (scheme.type === 'oauth2') {
       const tokenUrl = scheme.flows?.clientCredentials?.tokenUrl ?? null;
       map[name] = { type: 'oauth2', tokenUrl };
@@ -437,7 +458,11 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
     for (const name of names) {
       const upper = name.toUpperCase().replace(/[^A-Z0-9]/g, '_');
       const scheme = schemes[name] as OpenAPIV3.SecuritySchemeObject;
-      if (scheme && 'type' in scheme && scheme.type === 'http' && scheme.scheme === 'basic') {
+      const httpScheme =
+        scheme && 'type' in scheme && scheme.type === 'http'
+          ? scheme.scheme?.toLowerCase()
+          : undefined;
+      if (scheme && 'type' in scheme && scheme.type === 'http' && httpScheme === 'basic') {
         lines.push(`${upper}_USERNAME="..."`, `${upper}_PASSWORD="..."`);
       } else if (scheme && 'type' in scheme && scheme.type === 'http') {
         lines.push(`${upper}_TOKEN="..."`);
@@ -529,7 +554,11 @@ export function generateWorkerReadme(input: CloudflareWorkerGenInput): string {
               }
               return oauthLines.join('\n');
             }
-            if (scheme && 'type' in scheme && scheme.type === 'http' && scheme.scheme === 'basic') {
+            const httpScheme =
+              scheme && 'type' in scheme && scheme.type === 'http'
+                ? scheme.scheme?.toLowerCase()
+                : undefined;
+            if (scheme && 'type' in scheme && scheme.type === 'http' && httpScheme === 'basic') {
               return `   npx wrangler secret put ${upper}_USERNAME\n   npx wrangler secret put ${upper}_PASSWORD`;
             }
             if (scheme && 'type' in scheme && scheme.type === 'http') {
@@ -581,5 +610,13 @@ npm run dev                      # http://localhost:8787/mcp
 ## Connect a client
 
 Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or, from Claude Desktop, the [mcp-remote](https://www.npmjs.com/package/mcp-remote) proxy pointed at your \`/mcp\` URL.
+
+## ⚠️ Security: this server is public by default
+
+Once deployed, anyone who discovers the \`workers.dev\` URL can call your tools — and your tools call the upstream API using the secrets you configured. For anything beyond a public/demo API, add authentication in front of \`/mcp\`:
+
+- **Cloudflare Access (recommended):** put the Worker behind [Access for SaaS](https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/secure-mcp-servers/) so users sign in with your identity provider before reaching it.
+- **OAuth:** use [\`@cloudflare/workers-oauth-provider\`](https://developers.cloudflare.com/agents/model-context-protocol/protocol/authorization/) to require a sign-in flow.
+- **Shared token (quickest):** add a check at the top of \`fetch()\` in \`src/index.ts\`, after the route check and before creating the server, comparing \`request.headers.get('authorization')\` to a \`Bearer\` token read from \`env\`; set it with \`npx wrangler secret put MCP_AUTH_TOKEN\` and send it from your MCP client.
 `;
 }

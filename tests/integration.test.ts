@@ -300,4 +300,43 @@ describe('integration: generate + typecheck', () => {
     expect(pkg.dependencies).not.toHaveProperty('agents');
     expect(pkg.devDependencies).toHaveProperty('wrangler');
   });
+
+  it('fails the cloudflare-worker target when no base URL can be resolved', () => {
+    // A spec with no `servers` entry and no --base-url cannot produce a working
+    // Worker (fetch needs an absolute URL), so generation must fail fast.
+    const noServerSpec = path.join(workdir, 'no-server.json');
+    fs.writeFileSync(
+      noServerSpec,
+      JSON.stringify({
+        openapi: '3.0.0',
+        info: { title: 'no-server', version: '1' },
+        paths: {
+          '/p': { get: { operationId: 'getP', responses: { '200': { description: 'ok' } } } },
+        },
+      })
+    );
+    let failed = false;
+    let output = '';
+    try {
+      execFileSync(
+        'node',
+        [
+          cliEntry,
+          '--input',
+          noServerSpec,
+          '--output',
+          path.join(workdir, 'no-server-out'),
+          '--transport',
+          'cloudflare-worker',
+          '--force',
+        ],
+        { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }
+      );
+    } catch (e: any) {
+      failed = true;
+      output = `${e.stdout ?? ''}${e.stderr ?? ''}`;
+    }
+    expect(failed).toBe(true);
+    expect(output).toMatch(/Unable to determine an API base URL/i);
+  });
 });

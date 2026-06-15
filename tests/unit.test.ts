@@ -523,6 +523,7 @@ describe('cloudflare-worker target', () => {
     expect(paths).toEqual(
       [
         '.dev.vars.example',
+        '.gitignore',
         'README.md',
         'package.json',
         'src/index.ts',
@@ -531,6 +532,42 @@ describe('cloudflare-worker target', () => {
         'wrangler.jsonc',
       ].sort()
     );
+  });
+
+  it('generates a .gitignore that excludes local secrets but keeps the example', () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'test-mcp',
+      serverVersion: '0.1.0',
+      securitySchemes: undefined,
+      baseUrl: 'https://api.example.com',
+    });
+    const gitignore = fileContent(files, '.gitignore');
+    expect(gitignore).toContain('.dev.vars');
+    expect(gitignore).toContain('node_modules/');
+    expect(gitignore).toContain('.wrangler/');
+    // The committed template must stay tracked.
+    expect(gitignore).toContain('!.dev.vars.example');
+  });
+
+  it('treats an http scheme as Basic regardless of casing (e.g. "Basic")', () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'test-mcp',
+      serverVersion: '0.1.0',
+      securitySchemes: {
+        basicAuth: { type: 'http', scheme: 'Basic' },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://api.example.com',
+    });
+    // Embedded metadata is normalized to lowercase so the runtime `=== 'basic'`
+    // check matches and the username/password env vars (not a bearer token) are used.
+    const index = fileContent(files, 'src/index.ts');
+    expect(index).toContain('"scheme": "basic"');
+    const devVars = fileContent(files, '.dev.vars.example');
+    expect(devVars).toContain('BASICAUTH_USERNAME');
+    expect(devVars).toContain('BASICAUTH_PASSWORD');
+    expect(devVars).not.toContain('BASICAUTH_TOKEN');
   });
 
   const petstorePath = fileURLToPath(new URL('./fixtures/real-petstore.json', import.meta.url));
