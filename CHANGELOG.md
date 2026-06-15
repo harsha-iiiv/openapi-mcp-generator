@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] - 2026-06-14
+
+### Added
+
+- `--transport cloudflare-worker`: generate a complete, deployable Cloudflare
+  Workers MCP server that serves Streamable HTTP at `/mcp` via the Cloudflare
+  Agents SDK (`createMcpHandler`). The user deploys with `npx wrangler deploy`,
+  signing into their own Cloudflare account. Non-secret config goes in
+  `wrangler.jsonc` `vars`; secrets are set with `wrangler secret put` and read
+  from the `env` binding. Auth is scheme-aware (API key in header/query/cookie,
+  HTTP basic/bearer, OAuth2 client-credentials). Tool extraction and naming
+  (including the 64-char abbreviation) are shared with the existing targets;
+  argument validation uses build-time-emitted zod (no runtime `eval`) and
+  requests use the global `fetch` (no Node `https`). The flags that don't apply
+  to Workers (`--header-passthrough`, `--custom-auth`, `--port`, `--insecure`,
+  `--generate-lib`, `--oauth-creds-in-body`) are ignored with a warning. Existing
+  stdio/web/streamable-http output is unchanged.
+
 ## [4.0.1] - 2026-06-14
 
 ### Fixed

@@ -44,6 +44,9 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 
 # Generate an MCP StreamableHTTP server
 openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir --transport=streamable-http --port=3000
+
+# Generate a deployable Cloudflare Worker MCP server
+openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir --transport=cloudflare-worker
 ```
 
 ### CLI Options
@@ -55,7 +58,7 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 | `--server-name`          | `-n`  | Name of the MCP server (`package.json:name`)                                                                                                   | OpenAPI title or `mcp-api-server` |
 | `--server-version`       | `-v`  | Version of the MCP server (`package.json:version`)                                                                                             | OpenAPI version or `1.0.0`        |
 | `--base-url`             | `-b`  | Base URL for API requests. Required if OpenAPI `servers` missing or ambiguous.                                                                 | Auto-detected if possible         |
-| `--transport`            | `-t`  | Transport mode: `"stdio"` (default), `"web"`, or `"streamable-http"`                                                                           | `"stdio"`                         |
+| `--transport`            | `-t`  | Transport mode: `"stdio"` (default), `"web"`, `"streamable-http"`, or `"cloudflare-worker"`                                                    | `"stdio"`                         |
 | `--port`                 | `-p`  | Port for web-based transports                                                                                                                  | `3000`                            |
 | `--default-include`      |       | Default behavior for x-mcp filtering. Accepts `true` or `false` (case-insensitive). `true` = include by default, `false` = exclude by default. | `true`                            |
 | `--allow-external-refs`  |       | Allow resolving external `http(s)` `$ref` references in the spec. Disabled by default to prevent SSRF during parsing.                          | `false`                           |
@@ -150,20 +153,43 @@ Implements the MCP StreamableHTTP transport which offers:
 - In-browser test client UI
 - Built with lightweight Hono framework
 
+### Cloudflare Worker
+
+Generates a complete, deployable [Cloudflare Workers](https://developers.cloudflare.com/workers/) project that serves the MCP server over **Streamable HTTP at `/mcp`** using the Cloudflare Agents SDK (`createMcpHandler`). Deploy it to your own Cloudflare account with one command:
+
+```bash
+openapi-mcp-generator --input ./openapi.json --output ./my-mcp-worker --transport cloudflare-worker
+cd my-mcp-worker
+npm install
+npx wrangler secret put API_KEY   # set upstream API secrets (see .dev.vars.example)
+npx wrangler deploy               # Wrangler logs into YOUR Cloudflare account and deploys
+```
+
+Highlights:
+
+- Stateless, runs on the free Workers tier (no Durable Objects or KV).
+- Non-secret config (e.g. `API_BASE_URL`) lives in `wrangler.jsonc` under `vars`; secrets are set with `wrangler secret put` and read from the `env` binding — never committed.
+- Workers-native runtime: global `fetch` (no Node `https`), and argument validation uses build-time-emitted zod (no runtime `eval`).
+- Auth is scheme-aware: API key (header/query/cookie), HTTP basic/bearer, and OAuth2 client-credentials are derived from `env` secrets.
+- `--header-passthrough`, `--custom-auth`, `--port`, `--insecure`, `--generate-lib`, and `--oauth-creds-in-body` do not apply to this target and are ignored with a warning.
+
+Local development: `cp .dev.vars.example .dev.vars`, fill in secrets, then `npm run dev` (serves `http://localhost:8787/mcp`). Connect with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or, from Claude Desktop, via [mcp-remote](https://www.npmjs.com/package/mcp-remote).
+
 ### Transport Comparison
 
-| Feature            | stdio               | web (SSE)         | streamable-http    |
-| ------------------ | ------------------- | ----------------- | ------------------ |
-| Protocol           | JSON-RPC over stdio | JSON-RPC over SSE | JSON-RPC over HTTP |
-| Connection         | Persistent          | Persistent        | Request/response   |
-| Bidirectional      | Yes                 | Yes               | Yes (stateful)     |
-| Multiple clients   | No                  | Yes               | Yes                |
-| Browser compatible | No                  | Yes               | Yes                |
-| Firewall friendly  | No                  | Yes               | Yes                |
-| Load balancing     | No                  | Limited           | Yes                |
-| Status codes       | No                  | Limited           | Full HTTP codes    |
-| Headers            | No                  | Limited           | Full HTTP headers  |
-| Test client        | No                  | Yes               | Yes                |
+| Feature            | stdio               | web (SSE)         | streamable-http    | cloudflare-worker       |
+| ------------------ | ------------------- | ----------------- | ------------------ | ----------------------- |
+| Protocol           | JSON-RPC over stdio | JSON-RPC over SSE | JSON-RPC over HTTP | Streamable HTTP at /mcp |
+| Connection         | Persistent          | Persistent        | Request/response   | Request/response        |
+| Bidirectional      | Yes                 | Yes               | Yes (stateful)     | Yes                     |
+| Multiple clients   | No                  | Yes               | Yes                | Yes                     |
+| Browser compatible | No                  | Yes               | Yes                | Yes                     |
+| Firewall friendly  | No                  | Yes               | Yes                | Yes                     |
+| Load balancing     | No                  | Limited           | Yes                | Yes (edge)              |
+| Status codes       | No                  | Limited           | Full HTTP codes    | Full HTTP codes         |
+| Headers            | No                  | Limited           | Full HTTP headers  | Full HTTP headers       |
+| Test client        | No                  | Yes               | Yes                | No (use MCP Inspector)  |
+| Hosting            | Local               | Self-hosted       | Self-hosted        | Cloudflare (serverless) |
 
 ---
 
