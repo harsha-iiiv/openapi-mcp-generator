@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] - 2026-06-14
+
+### Added
+
+- `--transport cloudflare-worker`: generate a complete, deployable Cloudflare
+  Workers MCP server that serves Streamable HTTP at `/mcp` via the MCP SDK's
+  `WebStandardStreamableHTTPServerTransport` (a fresh server + transport per
+  request, per the MCP SDK ≥ 1.26 isolation requirement) — no extra agent
+  framework dependency, just `@modelcontextprotocol/sdk` and `zod`. The user
+  deploys with `npx wrangler deploy`,
+  signing into their own Cloudflare account. Non-secret config goes in
+  `wrangler.jsonc` `vars`; secrets are set with `wrangler secret put` and read
+  from the `env` binding. Auth is scheme-aware (API key in header/query/cookie,
+  HTTP basic/bearer, OAuth2 client-credentials). Tool extraction and naming
+  (including the 64-char abbreviation) are shared with the existing targets;
+  argument validation uses build-time-emitted zod (no runtime `eval`) and
+  requests use the global `fetch` (no Node `https`). The flags that don't apply
+  to Workers (`--header-passthrough`, `--custom-auth`, `--port`, `--insecure`,
+  `--generate-lib`, `--oauth-creds-in-body`) are ignored with a warning. Existing
+  stdio/web/streamable-http output is unchanged.
+  - When the spec's `servers` URL is relative (e.g. `/api/v3`) the generator now
+    warns at generation time, and the generated Worker returns an actionable MCP
+    error (asking for an absolute `API_BASE_URL`) instead of a cryptic "Invalid
+    URL string" — the Workers `fetch` runtime requires an absolute upstream URL.
+    Pass `--base-url https://host/path` to bake one in. Generation fails fast
+    when no base URL can be resolved at all.
+  - The generated project now includes a `.gitignore` that excludes `.dev.vars`
+    (local secrets), `node_modules/`, `.wrangler/`, and `dist/`.
+  - HTTP auth scheme names are normalized case-insensitively, so a spec written
+    as `"Basic"`/`"Bearer"` is handled correctly (RFC 7235).
+  - The generated `README.md` documents that the Worker is public by default and
+    how to add authentication (Cloudflare Access, OAuth, or a shared token).
+
 ## [4.0.1] - 2026-06-14
 
 ### Fixed
