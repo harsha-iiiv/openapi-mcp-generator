@@ -230,4 +230,73 @@ describe('integration: generate + typecheck', () => {
     const res = typecheckGenerated(path.join(out, 'src'));
     expect(res.ok, res.output).toBe(true);
   });
+
+  it('generates a Cloudflare Worker project with the expected files and shape', () => {
+    // The Worker project's npm deps (agents, @cloudflare/workers-types, wrangler)
+    // aren't installed at the repo root, so a full tsc/npm-install typecheck would
+    // fail on missing types. Following the web-transport precedent above, we assert
+    // on the generated source shape instead of full type-checking (and avoid a slow,
+    // flaky npm install / wrangler dry-run in CI).
+    const realSpec = path.join(here, 'fixtures', 'real-petstore.json');
+    const out = path.join(workdir, 'cf-worker');
+    execFileSync(
+      'node',
+      [
+        cliEntry,
+        '--input',
+        realSpec,
+        '--output',
+        out,
+        '--force',
+        '--transport',
+        'cloudflare-worker',
+      ],
+      { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }
+    );
+
+    // Worker-target files exist at the out root.
+    for (const f of [
+      'wrangler.jsonc',
+      'package.json',
+      'tsconfig.json',
+      '.dev.vars.example',
+      'README.md',
+    ]) {
+      expect(fs.existsSync(path.join(out, f)), `missing ${f}`).toBe(true);
+    }
+    // Worker source files exist.
+    expect(fs.existsSync(path.join(out, 'src', 'index.ts'))).toBe(true);
+    expect(fs.existsSync(path.join(out, 'src', 'tools.ts'))).toBe(true);
+
+    // Node-target files must NOT exist (proves the early-return isolation
+    // end-to-end through the real CLI).
+    for (const f of ['.env.example', 'jest.config.js', '.eslintrc.json']) {
+      expect(fs.existsSync(path.join(out, f)), `unexpected ${f}`).toBe(false);
+    }
+
+    // src/index.ts shape: Worker runtime, not Node.
+    const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
+    expect(indexTs).toContain("import { createMcpHandler } from 'agents/mcp'");
+    expect(indexTs).toContain("{ route: '/mcp' }");
+    expect(indexTs).toContain('await fetch(');
+    expect(indexTs).not.toContain('node:https');
+    expect(indexTs).not.toContain('process.env');
+    expect(indexTs).not.toMatch(/\beval\s*\(/);
+
+    // src/tools.ts exposes the shared tool maps.
+    const toolsTs = fs.readFileSync(path.join(out, 'src', 'tools.ts'), 'utf8');
+    expect(toolsTs).toContain('export const toolDefinitionMap');
+    expect(toolsTs).toContain('export const toolZodShapes');
+
+    // wrangler.jsonc is configured for the Worker entrypoint + Node compat.
+    const wrangler = fs.readFileSync(path.join(out, 'wrangler.jsonc'), 'utf8');
+    expect(wrangler).toContain('"nodejs_compat"');
+    expect(wrangler).toContain('"main": "src/index.ts"');
+
+    // package.json declares the Worker deps.
+    const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
+    expect(pkg.dependencies).toHaveProperty('agents');
+    expect(pkg.dependencies).toHaveProperty('@modelcontextprotocol/sdk');
+    expect(pkg.devDependencies).toHaveProperty('wrangler');
+  });
 });
