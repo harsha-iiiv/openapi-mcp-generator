@@ -713,4 +713,24 @@ describe('cloudflare-worker target', () => {
     // Cookie value is URL-encoded to stay RFC 6265 safe.
     expect(index).toContain('encodeURIComponent(key)');
   });
+
+  it('guards against a non-absolute base URL at runtime with an actionable error', async () => {
+    const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
+    const files = generateCloudflareWorkerFiles({
+      tools,
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: undefined,
+      // A relative base URL (common when the spec's server is e.g. "/api/v3").
+      baseUrl: '/api/v3',
+    });
+    const index = fileContent(files, 'src/index.ts');
+    // The Workers runtime can't build a request from a relative base URL; the
+    // generated code must check for an absolute http(s) URL and return an MCP
+    // error explaining how to fix it, rather than throwing "Invalid URL string".
+    expect(index).toContain('is not absolute');
+    expect(index).toContain('API_BASE_URL');
+    // It checks for an http(s) scheme before constructing the URL.
+    expect(index).toMatch(/test\(baseUrl\)/);
+  });
 });

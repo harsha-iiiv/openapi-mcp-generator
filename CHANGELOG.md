@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to Workers (`--header-passthrough`, `--custom-auth`, `--port`, `--insecure`,
   `--generate-lib`, `--oauth-creds-in-body`) are ignored with a warning. Existing
   stdio/web/streamable-http output is unchanged.
+  - When the spec's `servers` URL is relative (e.g. `/api/v3`) the generator now
+    warns at generation time, and the generated Worker returns an actionable MCP
+    error (asking for an absolute `API_BASE_URL`) instead of a cryptic "Invalid
+    URL string" — the Workers `fetch` runtime requires an absolute upstream URL.
+    Pass `--base-url https://host/path` to bake one in.
 
 ## [4.0.1] - 2026-06-14
 

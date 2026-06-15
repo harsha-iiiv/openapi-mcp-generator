@@ -245,6 +245,25 @@ async function executeApiTool(
     }
     if ('requestBody' in args) bodyArg = (args as { requestBody?: unknown }).requestBody;
 
+    // The Workers runtime requires an absolute URL (with origin). OpenAPI specs
+    // frequently declare a relative server (e.g. "/api/v3"), which can't be used
+    // directly — surface an actionable error instead of a cryptic "Invalid URL".
+    if (!/^https?:\\/\\//i.test(baseUrl)) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text:
+              \`Cannot call the upstream API: base URL "\${baseUrl || '(empty)'}" is not absolute. \` +
+              \`The OpenAPI spec's server is relative or missing. Set an absolute API_BASE_URL \` +
+              \`(e.g. \\\`wrangler secret put API_BASE_URL\\\` or the "vars" entry in wrangler.jsonc), \` +
+              \`for example "https://petstore3.swagger.io/api/v3".\`,
+          },
+        ],
+      };
+    }
+
     const url = new URL(baseUrl + pathName);
     queryParams.forEach((v, k) => url.searchParams.set(k, v));
 
