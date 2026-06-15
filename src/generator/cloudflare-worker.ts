@@ -325,6 +325,13 @@ async function applyAuth(
         const tokenUrl = scheme.tokenUrl ?? env[\`\${upper}_TOKEN_URL\`] ?? env.OAUTH_TOKEN_URL;
         if (!clientId || !clientSecret || !tokenUrl) continue;
         try {
+          // Forward the operation's required scopes (from securityRequirements)
+          // so scope-gated token servers (Auth0/Okta/Azure AD) issue a usable token.
+          const tokenBody = new URLSearchParams({ grant_type: 'client_credentials' });
+          const scopes = requirement[schemeName];
+          if (Array.isArray(scopes) && scopes.length > 0) {
+            tokenBody.set('scope', scopes.join(' '));
+          }
           const tokenResponse = await fetch(tokenUrl, {
             method: 'POST',
             headers: {
@@ -332,7 +339,7 @@ async function applyAuth(
               'content-type': 'application/x-www-form-urlencoded',
               authorization: 'Basic ' + btoa(\`\${clientId}:\${clientSecret}\`),
             },
-            body: 'grant_type=client_credentials',
+            body: tokenBody.toString(),
           });
           if (!tokenResponse.ok) continue;
           const tokenData = (await tokenResponse.json()) as { access_token?: string };
@@ -466,7 +473,18 @@ export function generateWorkerReadme(input: CloudflareWorkerGenInput): string {
             // Emit the secret name(s) that match this scheme's type so the deploy
             // hint stays in sync with .dev.vars.example.
             if (scheme && 'type' in scheme && scheme.type === 'oauth2') {
-              return `   npx wrangler secret put ${upper}_CLIENT_ID\n   npx wrangler secret put ${upper}_CLIENT_SECRET`;
+              const hasTokenUrl = Boolean(
+                (scheme as OpenAPIV3.OAuth2SecurityScheme).flows?.clientCredentials?.tokenUrl
+              );
+              const oauthLines = [
+                `   npx wrangler secret put ${upper}_CLIENT_ID`,
+                `   npx wrangler secret put ${upper}_CLIENT_SECRET`,
+              ];
+              // When the spec omits the token URL, it must be supplied as a secret too.
+              if (!hasTokenUrl) {
+                oauthLines.push(`   npx wrangler secret put ${upper}_TOKEN_URL`);
+              }
+              return oauthLines.join('\n');
             }
             if (scheme && 'type' in scheme && scheme.type === 'http' && scheme.scheme === 'basic') {
               return `   npx wrangler secret put ${upper}_USERNAME\n   npx wrangler secret put ${upper}_PASSWORD`;

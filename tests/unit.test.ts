@@ -623,7 +623,7 @@ describe('cloudflare-worker target', () => {
     expect(index).toContain('url.searchParams.set');
   });
 
-  it('emits an oauth2 client-credentials token fetch and the matching dev vars', async () => {
+  it('emits an oauth2 client-credentials token fetch (with scope forwarding) and dev vars', async () => {
     const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
     const files = generateCloudflareWorkerFiles({
       tools,
@@ -639,11 +639,72 @@ describe('cloudflare-worker target', () => {
     });
     const index = fileContent(files, 'src/index.ts');
 
-    expect(index).toContain('grant_type=client_credentials');
+    // Token request is built with URLSearchParams (grant_type + optional scope).
+    expect(index).toContain("grant_type: 'client_credentials'");
     expect(index).toContain('tokenUrl');
+    // Scopes from the operation's securityRequirements are forwarded.
+    expect(index).toContain("tokenBody.set('scope'");
 
     const devVars = fileContent(files, '.dev.vars.example');
     expect(devVars).toContain('OAUTH_CLIENT_ID');
     expect(devVars).toContain('OAUTH_CLIENT_SECRET');
+  });
+
+  it('emits an oauth2 TOKEN_URL secret hint when the spec omits the token URL', async () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: {
+        oauth: { type: 'oauth2', flows: {} },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://petstore.example.com',
+    });
+    const devVars = fileContent(files, '.dev.vars.example');
+    const readme = fileContent(files, 'README.md');
+    // Both the dev vars and the README deploy steps must mention TOKEN_URL.
+    expect(devVars).toContain('OAUTH_TOKEN_URL');
+    expect(readme).toContain('OAUTH_TOKEN_URL');
+  });
+
+  it('places an http bearer scheme into an Authorization header from a TOKEN secret', async () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: {
+        bearerAuth: { type: 'http', scheme: 'bearer' },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://petstore.example.com',
+    });
+    const index = fileContent(files, 'src/index.ts');
+    // The scheme metadata is embedded; the env-var name is derived at runtime
+    // from the scheme name (`${upper}_TOKEN`), not baked into the source.
+    expect(index).toContain('"type": "http"');
+    expect(index).toContain('"scheme": "bearer"');
+    expect(index).toContain('${upper}_TOKEN');
+    expect(index).toContain('Bearer ${token}');
+
+    // The concrete secret name is what the user must set, documented in dev vars.
+    const devVars = fileContent(files, '.dev.vars.example');
+    expect(devVars).toContain('BEARERAUTH_TOKEN');
+  });
+
+  it('places an apiKey in=cookie scheme into an encoded Cookie header', async () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: {
+        ckey: { type: 'apiKey', in: 'cookie', name: 'session' },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://petstore.example.com',
+    });
+    const index = fileContent(files, 'src/index.ts');
+    expect(index).toContain('"in": "cookie"');
+    expect(index).toContain('"name": "session"');
+    expect(index).toContain("headers['cookie']");
+    // Cookie value is URL-encoded to stay RFC 6265 safe.
+    expect(index).toContain('encodeURIComponent(key)');
   });
 });
