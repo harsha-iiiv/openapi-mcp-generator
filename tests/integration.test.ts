@@ -276,9 +276,10 @@ describe('integration: generate + typecheck', () => {
 
     // src/index.ts shape: Worker runtime, not Node.
     const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
-    expect(indexTs).toContain("import { createMcpHandler } from 'agents/mcp'");
-    expect(indexTs).toContain("{ route: '/mcp' }");
+    expect(indexTs).toContain('WebStandardStreamableHTTPServerTransport');
+    expect(indexTs).toContain('transport.handleRequest(request)');
     expect(indexTs).toContain('await fetch(');
+    expect(indexTs).not.toContain('agents/mcp');
     expect(indexTs).not.toContain('node:https');
     expect(indexTs).not.toContain('process.env');
     expect(indexTs).not.toMatch(/\beval\s*\(/);
@@ -295,8 +296,8 @@ describe('integration: generate + typecheck', () => {
 
     // package.json declares the Worker deps.
     const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
-    expect(pkg.dependencies).toHaveProperty('agents');
     expect(pkg.dependencies).toHaveProperty('@modelcontextprotocol/sdk');
+    expect(pkg.dependencies).not.toHaveProperty('agents');
     expect(pkg.devDependencies).toHaveProperty('wrangler');
   });
 });

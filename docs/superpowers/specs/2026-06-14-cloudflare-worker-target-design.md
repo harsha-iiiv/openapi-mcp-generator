@@ -1,9 +1,21 @@
 # Design: Cloudflare Worker deploy target
 
 **Date:** 2026-06-14
-**Status:** Approved (pending spec review)
+**Status:** Implemented (with one approved deviation — see below)
 **Target version:** 4.1.0 (minor — additive, zero breaking changes)
 **Issue/source:** User request — "deploy MCP servers on Cloudflare with one click, sign in with their own account." Based on Cloudflare's "Build a Remote MCP server" guide.
+
+> **Implementation deviation (verified during local testing).** Local `wrangler deploy --dry-run`
+> revealed that the published `agents` package's `agents/mcp` does **not** export
+> `createMcpHandler` in any lightweight version — Cloudflare's docs are ahead of npm, and every
+> `agents` release that *does* export it (≥ 0.3.0) drags in a heavy peer set (`ai@6`, `react@19`,
+> `zod@4`, `viem`, x402) a generated MCP proxy never uses. The implementation therefore uses the
+> MCP SDK's **`WebStandardStreamableHTTPServerTransport`** directly (the raw stateless option in
+> Cloudflare's own guide), creating a fresh `McpServer` + transport per request (required by MCP
+> SDK ≥ 1.26). The generated project depends only on `@modelcontextprotocol/sdk` (^1.26) and
+> `zod` — no `agents` package. Everything else in this spec (stateless, `/mcp`, vars/secret split,
+> scheme-aware auth, build-time zod, no eval/no node:https) holds as written. References to
+> `createMcpHandler` / `agents/mcp` below are historical.
 
 ## Summary
 

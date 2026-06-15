@@ -10,8 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `--transport cloudflare-worker`: generate a complete, deployable Cloudflare
-  Workers MCP server that serves Streamable HTTP at `/mcp` via the Cloudflare
-  Agents SDK (`createMcpHandler`). The user deploys with `npx wrangler deploy`,
+  Workers MCP server that serves Streamable HTTP at `/mcp` via the MCP SDK's
+  `WebStandardStreamableHTTPServerTransport` (a fresh server + transport per
+  request, per the MCP SDK ≥ 1.26 isolation requirement) — no extra agent
+  framework dependency, just `@modelcontextprotocol/sdk` and `zod`. The user
+  deploys with `npx wrangler deploy`,
   signing into their own Cloudflare account. Non-secret config goes in
   `wrangler.jsonc` `vars`; secrets are set with `wrangler secret put` and read
   from the `env` binding. Auth is scheme-aware (API key in header/query/cookie,

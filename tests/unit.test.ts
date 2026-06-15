@@ -554,10 +554,16 @@ describe('cloudflare-worker target', () => {
     });
     const index = fileContent(files, 'src/index.ts');
 
-    expect(index).toContain("import { createMcpHandler } from 'agents/mcp'");
     expect(index).toContain("import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'");
-    expect(index).toContain("{ route: '/mcp' }");
+    expect(index).toContain(
+      "import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'"
+    );
+    expect(index).toContain("const MCP_ROUTE = '/mcp'");
+    expect(index).toContain('new WebStandardStreamableHTTPServerTransport()');
+    expect(index).toContain('transport.handleRequest(request)');
     expect(index).toContain('await fetch(');
+    // No dependency on the Cloudflare `agents` package (raw SDK transport only).
+    expect(index).not.toContain('agents/mcp');
     expect(index).not.toContain('node:https');
     expect(index).not.toContain('process.env');
     expect(index).not.toMatch(/\beval\s*\(/);

@@ -155,7 +155,7 @@ Implements the MCP StreamableHTTP transport which offers:
 
 ### Cloudflare Worker
 
-Generates a complete, deployable [Cloudflare Workers](https://developers.cloudflare.com/workers/) project that serves the MCP server over **Streamable HTTP at `/mcp`** using the Cloudflare Agents SDK (`createMcpHandler`). Deploy it to your own Cloudflare account with one command:
+Generates a complete, deployable [Cloudflare Workers](https://developers.cloudflare.com/workers/) project that serves the MCP server over **Streamable HTTP at `/mcp`** using the MCP SDK's `WebStandardStreamableHTTPServerTransport` directly (no extra framework dependency). Deploy it to your own Cloudflare account with one command:
 
 ```bash
 openapi-mcp-generator --input ./openapi.json --output ./my-mcp-worker --transport cloudflare-worker
@@ -167,7 +167,8 @@ npx wrangler deploy               # Wrangler logs into YOUR Cloudflare account a
 
 Highlights:
 
-- Stateless, runs on the free Workers tier (no Durable Objects or KV).
+- Stateless, runs on the free Workers tier (no Durable Objects or KV). A fresh MCP server + transport is created per request (required by MCP SDK ≥ 1.26).
+- Lean dependencies: just `@modelcontextprotocol/sdk` and `zod` — no extra agent framework.
 - Non-secret config (e.g. `API_BASE_URL`) lives in `wrangler.jsonc` under `vars`; secrets are set with `wrangler secret put` and read from the `env` binding — never committed.
 - Workers-native runtime: global `fetch` (no Node `https`), and argument validation uses build-time-emitted zod (no runtime `eval`).
 - Auth is scheme-aware: API key (header/query/cookie), HTTP basic/bearer, and OAuth2 client-credentials are derived from `env` secrets.
