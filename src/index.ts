@@ -226,6 +226,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         ['--port', options.port !== undefined],
         ['--insecure', Boolean(options.insecure)],
         ['--generate-lib', Boolean(options.generateLib)],
+        ['--oauth-creds-in-body', Boolean(options.oauthCredsInBody)],
       ] as const) {
         if (present) {
           console.error(
@@ -249,7 +250,8 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         baseUrl: resolvedBaseUrl,
       });
 
-      await fs.mkdir(srcDir, { recursive: true });
+      // Each file's parent directory is created per-iteration below, so no
+      // separate srcDir mkdir is needed here.
       for (const file of files) {
         const dest = path.join(outputDir, file.path);
         await fs.mkdir(path.dirname(dest), { recursive: true });
