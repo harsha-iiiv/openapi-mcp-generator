@@ -244,6 +244,9 @@ describe('integration: generate + typecheck', () => {
     expect(indexTs).toContain('searchTweets');
     expect(indexTs).toContain('https://xquik.com');
     expect(indexTs).toContain('"x-api-key"');
+    expect(indexTs).toContain('"oauthBearer"');
+    expect(indexTs).toContain('BEARER_TOKEN_${schemeName.replace');
+    expect(indexTs).toContain("headers['authorization'] = `Bearer ${token}`");
 
     const envExample = fs.readFileSync(path.join(out, '.env.example'), 'utf8');
     expect(envExample).toContain('API_KEY_APIKEY=your_api_key_here');
