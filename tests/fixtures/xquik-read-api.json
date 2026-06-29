@@ -1,0 +1,130 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Xquik Read API",
+    "version": "1.0.0",
+    "description": "Compact fixture for an X data read endpoint with API key or OAuth bearer authentication."
+  },
+  "servers": [
+    {
+      "url": "https://xquik.com"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "API key passed through the x-api-key header."
+      },
+      "oauthBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "OAuth 2.1 bearer token."
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/x/tweets/search": {
+      "get": {
+        "summary": "Search tweets by query",
+        "operationId": "searchTweets",
+        "security": [
+          {
+            "apiKey": []
+          },
+          {
+            "oauthBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search query."
+          },
+          {
+            "name": "queryType",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "Latest",
+                "Top"
+              ],
+              "default": "Latest"
+            },
+            "description": "Sort order."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 200
+            },
+            "description": "Maximum tweets to return."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "tweets"
+                  ],
+                  "properties": {
+                    "tweets": {
+                      "type": "array",
+                      "description": "Tweet results.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Tweet ID."
+                          },
+                          "text": {
+                            "type": "string",
+                            "description": "Tweet text."
+                          },
+                          "author": {
+                            "type": "object",
+                            "description": "Tweet author.",
+                            "properties": {
+                              "username": {
+                                "type": "string",
+                                "description": "Author username."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "has_next_page": {
+                      "type": "boolean",
+                      "description": "Whether another page is available."
+                    },
+                    "next_cursor": {
+                      "type": "string",
+                      "description": "Cursor for the next page."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

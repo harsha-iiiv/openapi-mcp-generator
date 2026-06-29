@@ -230,4 +230,29 @@ describe('integration: generate + typecheck', () => {
     const res = typecheckGenerated(path.join(out, 'src'));
     expect(res.ok, res.output).toBe(true);
   });
+
+  it('generates an API-key protected Xquik read API spec that type-checks', () => {
+    const xquikSpec = path.join(here, 'fixtures', 'xquik-read-api.json');
+    const out = path.join(workdir, 'xquik');
+    execFileSync('node', [cliEntry, '--input', xquikSpec, '--output', out, '--force'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+
+    const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
+    expect(indexTs).toContain('searchTweets');
+    expect(indexTs).toContain('https://xquik.com');
+    expect(indexTs).toContain('"x-api-key"');
+    expect(indexTs).toContain('"oauthBearer"');
+    expect(indexTs).toContain('BEARER_TOKEN_${schemeName.replace');
+    expect(indexTs).toContain("headers['authorization'] = `Bearer ${token}`");
+
+    const envExample = fs.readFileSync(path.join(out, '.env.example'), 'utf8');
+    expect(envExample).toContain('API_KEY_APIKEY=your_api_key_here');
+    expect(envExample).toContain('BEARER_TOKEN_OAUTHBEARER=your_bearer_token_here');
+
+    const res = typecheckGenerated(path.join(out, 'src'));
+    expect(res.ok, res.output).toBe(true);
+  });
 });
