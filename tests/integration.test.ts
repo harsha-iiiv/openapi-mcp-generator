@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
 const fixture = path.join(here, 'fixtures', 'sample-api.json');
+const xquikFixture = path.join(here, 'fixtures', 'xquik-openapi31.json');
 const cliEntry = path.join(repoRoot, 'bin', 'openapi-mcp-generator.js');
 
 /**
@@ -226,6 +227,28 @@ describe('integration: generate + typecheck', () => {
         expect(execNames.has(p), `missing path param ${p} in ${tmpl}`).toBe(true);
     }
     expect(pathParamTools).toBeGreaterThan(0);
+
+    const res = typecheckGenerated(path.join(out, 'src'));
+    expect(res.ok, res.output).toBe(true);
+  });
+
+  it('generates an OpenAPI 3.1 API-key spec that type-checks', () => {
+    const out = path.join(workdir, 'xquik');
+    execFileSync('node', [cliEntry, '--input', xquikFixture, '--output', out, '--force'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
+    const envExample = fs.readFileSync(path.join(out, '.env.example'), 'utf8');
+
+    expect(indexTs).toContain('getAccount');
+    expect(indexTs).toContain('updateAccount');
+    expect(indexTs).toContain('"apiKey"');
+    expect(indexTs).toContain('"oauthBearer"');
+    expect(indexTs).toContain('"x-api-key"');
+    expect(envExample).toContain('API_KEY_APIKEY');
+    expect(envExample).toContain('BEARER_TOKEN_OAUTHBEARER');
 
     const res = typecheckGenerated(path.join(out, 'src'));
     expect(res.ok, res.output).toBe(true);

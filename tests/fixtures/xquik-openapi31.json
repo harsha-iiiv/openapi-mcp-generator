@@ -1,0 +1,82 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Xquik API",
+    "version": "1.0",
+    "description": "Fixture covering OpenAPI 3.1, API key auth, bearer auth, and account endpoints."
+  },
+  "servers": [{ "url": "https://xquik.com" }],
+  "security": [{ "apiKey": [] }, { "oauthBearer": [] }],
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
+      "oauthBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/account": {
+      "get": {
+        "operationId": "getAccount",
+        "summary": "Get account info",
+        "tags": ["Account"],
+        "security": [{ "apiKey": [] }, { "oauthBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Account info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plan", "monitorsUsed"],
+                  "properties": {
+                    "plan": {
+                      "type": "string",
+                      "enum": ["active", "inactive"]
+                    },
+                    "monitorsUsed": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthenticated" }
+        }
+      },
+      "patch": {
+        "operationId": "updateAccount",
+        "summary": "Update account locale",
+        "tags": ["Account"],
+        "security": [{ "apiKey": [] }, { "oauthBearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["locale"],
+                "properties": {
+                  "locale": {
+                    "type": "string",
+                    "enum": ["en", "tr", "es"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Success" },
+          "400": { "description": "Invalid input" },
+          "401": { "description": "Unauthenticated" }
+        }
+      }
+    }
+  }
+}
