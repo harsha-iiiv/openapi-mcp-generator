@@ -52,10 +52,10 @@ function typecheckGenerated(srcDir: string): { ok: boolean; output: string } {
   }
 }
 
-function generate(outDir: string, extraArgs: string[]): void {
+function generate(outDir: string, extraArgs: string[], specFixture = fixture): void {
   execFileSync(
     'node',
-    [cliEntry, '--input', fixture, '--output', outDir, '--force', ...extraArgs],
+    [cliEntry, '--input', specFixture, '--output', outDir, '--force', ...extraArgs],
     { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }
   );
 }
@@ -234,11 +234,7 @@ describe('integration: generate + typecheck', () => {
 
   it('generates an OpenAPI 3.1 API-key spec that type-checks', () => {
     const out = path.join(workdir, 'xquik');
-    execFileSync('node', [cliEntry, '--input', xquikFixture, '--output', out, '--force'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
+    generate(out, [], xquikFixture);
     const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
     const envExample = fs.readFileSync(path.join(out, '.env.example'), 'utf8');
 
