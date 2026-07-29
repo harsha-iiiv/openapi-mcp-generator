@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
 const fixture = path.join(here, 'fixtures', 'sample-api.json');
+const xquikOpenApi31Fixture = path.join(here, 'fixtures', 'xquik-openapi31.json');
 const cliEntry = path.join(repoRoot, 'bin', 'openapi-mcp-generator.js');
 
 /**
@@ -51,10 +52,11 @@ function typecheckGenerated(srcDir: string): { ok: boolean; output: string } {
   }
 }
 
-function generate(outDir: string, extraArgs: string[]): void {
+/** Generate a server from a fixture for integration assertions. */
+function generate(outDir: string, extraArgs: string[], specFixture = fixture): void {
   execFileSync(
     'node',
-    [cliEntry, '--input', fixture, '--output', outDir, '--force', ...extraArgs],
+    [cliEntry, '--input', specFixture, '--output', outDir, '--force', ...extraArgs],
     { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }
   );
 }
@@ -130,8 +132,35 @@ describe('integration: generate + typecheck', () => {
     expect(webTs).toContain("import { inboundHeaderStore } from './index.js'");
     expect(webTs).toContain('inboundHeaderStore.run(');
     expect(webTs).not.toContain('__mcpInboundHeaders');
+    expect(webTs).toContain("path.join(__dirname, '..', 'public')");
+    expect(webTs).not.toContain("path.join(__dirname, '..', '..', 'public')");
     const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
     expect(indexTs).toContain('export const inboundHeaderStore');
+  });
+
+  it('resolves Streamable HTTP assets from the generated public directory (issue #45)', () => {
+    const out = path.join(workdir, 'streamable-public-path');
+    const relativeOut = path.relative(repoRoot, out);
+    expect(path.isAbsolute(relativeOut)).toBe(false);
+    generate(relativeOut, ['--transport', 'streamable-http']);
+    const streamableTs = fs.readFileSync(path.join(out, 'src', 'streamable-http.ts'), 'utf8');
+
+    expect(streamableTs).toContain("path.join(__dirname, '..', 'public')");
+    expect(streamableTs).not.toContain("path.join(__dirname, '..', '..', 'public')");
+    expect(streamableTs).toContain('await c.req.raw.clone().json()');
+    expect(streamableTs).not.toContain('await c.req.json()');
+
+    const clientHtml = fs.readFileSync(path.join(out, 'public', 'index.html'), 'utf8');
+    expect(clientHtml).toContain("const protocolVersion = '2025-03-26'");
+    expect(clientHtml).toMatch(/params:\s*\{\s*protocolVersion,/);
+    expect(clientHtml).toContain('clientInfo: {');
+    expect(clientHtml).not.toContain('clientName:');
+    expect(clientHtml).toContain("method: 'notifications/initialized'");
+    expect(clientHtml).toContain("method: 'tools/list'");
+    expect(clientHtml).toContain("method: 'tools/call'");
+    expect(clientHtml).not.toContain("method: 'listTools'");
+    expect(clientHtml).not.toContain("method: 'callTool'");
+    expect(clientHtml).toContain("'Accept': 'application/json, text/event-stream'");
   });
 
   it('rejects external $ref by default (SSRF guard)', () => {
@@ -226,6 +255,97 @@ describe('integration: generate + typecheck', () => {
         expect(execNames.has(p), `missing path param ${p} in ${tmpl}`).toBe(true);
     }
     expect(pathParamTools).toBeGreaterThan(0);
+
+    const res = typecheckGenerated(path.join(out, 'src'));
+    expect(res.ok, res.output).toBe(true);
+  });
+
+  it('generates an API-key protected Xquik read API spec that type-checks', () => {
+    const xquikSpec = path.join(here, 'fixtures', 'xquik-read-api.json');
+    const out = path.join(workdir, 'xquik');
+    generate(out, [], xquikSpec);
+
+    const sourceSchema = JSON.parse(fs.readFileSync(xquikSpec, 'utf8'));
+    const tweetsSchema =
+      sourceSchema.paths['/api/v1/x/tweets/search'].get.responses['200'].content['application/json']
+        .schema.properties.tweets;
+    expect(tweetsSchema).toMatchObject({
+      type: 'array',
+      maxItems: 200,
+      items: {
+        type: 'object',
+        properties: {
+          author: {
+            type: 'object',
+            properties: {
+              username: { type: 'string' },
+            },
+          },
+        },
+      },
+    });
+
+    const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
+    expect(indexTs).toContain('searchTweets');
+    expect(indexTs).toContain('https://xquik.com');
+    expect(indexTs).toContain('"x-api-key"');
+    expect(indexTs).toContain('"oauthBearer"');
+    expect(indexTs).toContain('BEARER_TOKEN_${schemeName.replace');
+    expect(indexTs).toContain("headers['authorization'] = `Bearer ${token}`");
+
+    const envExample = fs.readFileSync(path.join(out, '.env.example'), 'utf8');
+    expect(envExample).toContain('API_KEY_APIKEY=your_api_key_here');
+    expect(envExample).toContain('BEARER_TOKEN_OAUTHBEARER=your_bearer_token_here');
+
+    const res = typecheckGenerated(path.join(out, 'src'));
+    expect(res.ok, res.output).toBe(true);
+  });
+
+  it('generates an OpenAPI 3.1 Xquik spec that type-checks', () => {
+    const out = path.join(workdir, 'xquik-openapi31');
+    generate(out, [], xquikOpenApi31Fixture);
+
+    const sourceSchema = JSON.parse(fs.readFileSync(xquikOpenApi31Fixture, 'utf8'));
+    const monitorBillingSchema =
+      sourceSchema.paths['/api/v1/account'].get.responses['200'].content['application/json'].schema
+        .properties.monitorBilling;
+    expect(monitorBillingSchema).toMatchObject({
+      type: 'object',
+      required: [
+        'activeDailyEstimate',
+        'activeHourlyBurn',
+        'creditsPerActiveMonitorDay',
+        'creditsPerActiveMonitorHour',
+        'eventsIncluded',
+        'instantCheckIntervalSeconds',
+        'unlimitedSlots',
+      ],
+      properties: {
+        activeDailyEstimate: { type: 'string' },
+        activeHourlyBurn: { type: 'string' },
+        creditsPerActiveMonitorDay: { type: 'string' },
+        creditsPerActiveMonitorHour: { type: 'string' },
+        eventsIncluded: { type: 'boolean' },
+        instantCheckIntervalSeconds: { type: 'integer' },
+        unlimitedSlots: { type: 'boolean' },
+      },
+    });
+
+    const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
+    expect(indexTs).toContain('getAccount');
+    expect(indexTs).toContain('updateAccount');
+    expect(indexTs).toContain('searchTweets');
+    expect(indexTs).toContain(
+      '"queryType":{"type":"string","enum":["Latest","Top"],"default":"Latest"'
+    );
+    expect(indexTs).toContain('{"name":"queryType","in":"query"}');
+    expect(indexTs).toContain('"apiKey"');
+    expect(indexTs).toContain('"oauthBearer"');
+    expect(indexTs).toContain('"x-api-key"');
+
+    const envExample = fs.readFileSync(path.join(out, '.env.example'), 'utf8');
+    expect(envExample).toContain('API_KEY_APIKEY');
+    expect(envExample).toContain('BEARER_TOKEN_OAUTHBEARER');
 
     const res = typecheckGenerated(path.join(out, 'src'));
     expect(res.ok, res.output).toBe(true);
