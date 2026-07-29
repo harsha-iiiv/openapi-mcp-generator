@@ -84,7 +84,7 @@ ${
     : ''
 }
     try {
-      const body = await c.req.json();
+      const body = await c.req.raw.clone().json();
       
       // Convert Fetch Request to Node.js req/res
       const { req, res } = toReqRes(c.req.raw);
@@ -227,7 +227,7 @@ export async function setupStreamableHttpServer(server: Server, port = ${port}) 
       const { fileURLToPath } = await import('url');
       
       const __dirname = path.dirname(fileURLToPath(import.meta.url));
-      const publicPath = path.join(__dirname, '..', '..', 'public');
+      const publicPath = path.join(__dirname, '..', 'public');
       const fullPath = path.join(publicPath, filePath);
       
       // Simple security check to prevent directory traversal
@@ -446,6 +446,39 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
     
     let sessionId = null;
     let messageId = 1;
+    const protocolVersion = '2025-03-26';
+
+    /** Build the headers required by the Streamable HTTP transport. */
+    function requestHeaders(includeSession = true) {
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream'
+      };
+      if (includeSession && sessionId) {
+        headers['mcp-session-id'] = sessionId;
+        headers['MCP-Protocol-Version'] = protocolVersion;
+      }
+      return headers;
+    }
+
+    /** Read one JSON-RPC message from JSON or an SSE response. */
+    async function readJsonRpcResponse(response) {
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('text/event-stream')) {
+        return response.json();
+      }
+
+      const body = await response.text();
+      const dataLines = body
+        .split(/\\r?\\n/)
+        .filter(line => line.startsWith('data:'))
+        .map(line => line.slice(5).trim())
+        .filter(Boolean);
+      if (dataLines.length === 0) {
+        throw new Error('Streamable HTTP response contained no JSON-RPC data.');
+      }
+      return JSON.parse(dataLines[dataLines.length - 1]);
+    }
     
     // Debug logging
     function log(type, message) {
@@ -484,9 +517,12 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
           id: messageId++,
           method: 'initialize',
           params: {
-            clientName: 'MCP StreamableHTTP Test Client',
-            clientVersion: '1.0.0',
-            capabilities: {}
+            protocolVersion,
+            capabilities: {},
+            clientInfo: {
+              name: 'MCP StreamableHTTP Test Client',
+              version: '1.0.0'
+            }
           }
         };
         
@@ -494,9 +530,7 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
         
         const response = await fetch('/mcp', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
+          headers: requestHeaders(false),
           body: JSON.stringify(requestBody)
         });
         
@@ -519,11 +553,23 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
         }
         
         // Process response body
-        const data = await response.json();
+        const data = await readJsonRpcResponse(response);
         log('RESPONSE', JSON.stringify(data));
         
         if (data.result) {
           appendMessage('server', JSON.stringify(data.result, null, 2));
+        }
+
+        const initializedResponse = await fetch('/mcp', {
+          method: 'POST',
+          headers: requestHeaders(),
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'notifications/initialized'
+          })
+        });
+        if (!initializedResponse.ok) {
+          throw new Error(\`Initialization notification failed with status \${initializedResponse.status}.\`);
         }
         
         // Enable UI
@@ -548,7 +594,7 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
         const requestBody = {
           jsonrpc: '2.0',
           id: messageId++,
-          method: 'listTools',
+          method: 'tools/list',
           params: {}
         };
         
@@ -556,10 +602,7 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
         
         const response = await fetch('/mcp', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'mcp-session-id': sessionId
-          },
+          headers: requestHeaders(),
           body: JSON.stringify(requestBody)
         });
         
@@ -569,7 +612,7 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
           return;
         }
         
-        const data = await response.json();
+        const data = await readJsonRpcResponse(response);
         log('TOOLS', JSON.stringify(data));
         
         if (data.result?.tools && Array.isArray(data.result.tools)) {
@@ -597,7 +640,7 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
         const requestBody = {
           jsonrpc: '2.0',
           id: messageId++,
-          method: 'callTool',
+          method: 'tools/call',
           params: {
             name: toolName,
             arguments: parseArguments(text)
@@ -608,10 +651,7 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
         
         const response = await fetch('/mcp', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'mcp-session-id': sessionId
-          },
+          headers: requestHeaders(),
           body: JSON.stringify(requestBody)
         });
         
@@ -622,7 +662,7 @@ export function generateStreamableHttpClientHtml(serverName: string): string {
           return;
         }
         
-        const data = await response.json();
+        const data = await readJsonRpcResponse(response);
         log('RESPONSE', JSON.stringify(data));
         
         if (data.error) {

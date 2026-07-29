@@ -1,0 +1,167 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Xquik API",
+    "version": "1.0",
+    "description": "Fixture covering OpenAPI 3.1, API key auth, bearer auth, and account endpoints. Not affiliated with X Corp."
+  },
+  "servers": [{ "url": "https://xquik.com" }],
+  "security": [{ "apiKey": [] }, { "oauthBearer": [] }],
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
+      "oauthBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/account": {
+      "get": {
+        "operationId": "getAccount",
+        "summary": "Get account info",
+        "tags": ["Account"],
+        "security": [{ "apiKey": [] }, { "oauthBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "Account info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plan", "monitorsUsed", "monitorBilling"],
+                  "properties": {
+                    "plan": {
+                      "type": "string",
+                      "enum": ["active", "inactive"]
+                    },
+                    "monitorsUsed": { "type": "integer" },
+                    "monitorBilling": {
+                      "type": "object",
+                      "required": [
+                        "activeDailyEstimate",
+                        "activeHourlyBurn",
+                        "creditsPerActiveMonitorDay",
+                        "creditsPerActiveMonitorHour",
+                        "eventsIncluded",
+                        "instantCheckIntervalSeconds",
+                        "unlimitedSlots"
+                      ],
+                      "properties": {
+                        "activeDailyEstimate": { "type": "string" },
+                        "activeHourlyBurn": { "type": "string" },
+                        "creditsPerActiveMonitorDay": { "type": "string" },
+                        "creditsPerActiveMonitorHour": { "type": "string" },
+                        "eventsIncluded": { "type": "boolean" },
+                        "instantCheckIntervalSeconds": { "type": "integer" },
+                        "unlimitedSlots": { "type": "boolean" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthenticated" }
+        }
+      },
+      "patch": {
+        "operationId": "updateAccount",
+        "summary": "Update account locale",
+        "tags": ["Account"],
+        "security": [{ "apiKey": [] }, { "oauthBearer": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["locale"],
+                "properties": {
+                  "locale": {
+                    "type": "string",
+                    "enum": ["en", "tr", "es"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Success" },
+          "400": { "description": "Invalid input" },
+          "401": { "description": "Unauthenticated" }
+        }
+      }
+    },
+    "/api/v1/x/tweets/search": {
+      "get": {
+        "operationId": "searchTweets",
+        "summary": "Search tweets",
+        "tags": ["Tweets"],
+        "security": [{ "apiKey": [] }, { "oauthBearer": [] }],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Search query.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "queryType",
+            "in": "query",
+            "description": "Sort order.",
+            "schema": {
+              "type": "string",
+              "enum": ["Latest", "Top"],
+              "default": "Latest"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum tweets to return.",
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["tweets"],
+                  "properties": {
+                    "tweets": {
+                      "type": "array",
+                      "maxItems": 200,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "text": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthenticated" }
+        }
+      }
+    }
+  }
+}

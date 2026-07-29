@@ -261,7 +261,7 @@ app.get('/*', async (c) => {
     const { fileURLToPath } = await import('url');
     
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    const publicPath = path.join(__dirname, '..', '..', 'public');
+    const publicPath = path.join(__dirname, '..', 'public');
     const fullPath = path.join(publicPath, filePath);
     
     // Simple security check to prevent directory traversal
