@@ -26,12 +26,15 @@ import {
   generateStreamableHttpCode,
   generateStreamableHttpClientHtml,
   generateCustomAuthStub,
+  generateCloudflareWorkerFiles,
 } from './generator/index.js';
 
 // Import types
 import { CliOptions, TransportType } from './types/index.js';
 import { normalizeBoolean } from './utils/helpers.js';
 import { parseSpecSecurely } from './utils/parser-security.js';
+import { extractToolsFromApi } from './parser/extract-tools.js';
+import { determineBaseUrl } from './utils/url.js';
 import pkg from '../package.json' with { type: 'json' };
 
 // Export programmatic API
@@ -67,7 +70,7 @@ program
   )
   .option(
     '-t, --transport <type>',
-    'Server transport type: "stdio", "web", or "streamable-http" (default: "stdio")'
+    'Server transport type: "stdio", "web", "streamable-http", or "cloudflare-worker" (default: "stdio")'
   )
   .option(
     '-p, --port <number>',
@@ -208,6 +211,86 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     const serverNameRaw = options.serverName || api.info?.title || 'my-mcp-server';
     const serverName = serverNameRaw.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
     const serverVersion = options.serverVersion || api.info?.version || '0.1.0';
+
+    // Cloudflare Worker target: emit a self-contained Workers project and return
+    // early. None of the Node-target generation below runs, so existing
+    // stdio/web/streamable-http output is unaffected.
+    if (options.transport === 'cloudflare-worker') {
+      // Warn about flags that do not apply to the Worker target.
+      for (const [flag, present] of [
+        [
+          '--header-passthrough',
+          Array.isArray(options.headerPassthrough) && options.headerPassthrough.length > 0,
+        ],
+        ['--custom-auth', Boolean(options.customAuth)],
+        ['--port', options.port !== undefined],
+        ['--insecure', Boolean(options.insecure)],
+        ['--generate-lib', Boolean(options.generateLib)],
+        ['--oauth-creds-in-body', Boolean(options.oauthCredsInBody)],
+      ] as const) {
+        if (present) {
+          console.error(
+            `Warning: ${flag} is not supported with --transport cloudflare-worker; ignoring.`
+          );
+        }
+      }
+
+      console.error('Generating Cloudflare Worker project...');
+      const tools = extractToolsFromApi(
+        api,
+        options.defaultInclude ?? true,
+        options.maxToolNameLength ?? 64
+      );
+      const resolvedBaseUrl = determineBaseUrl(api, options.baseUrl) || '';
+      // Workers' fetch needs an absolute upstream URL.
+      // - No base URL at all (no spec `servers`, no --base-url): unrecoverable
+      //   without more input, so fail fast rather than emit a broken Worker.
+      // - A relative base URL (e.g. the spec's server is "/api/v3"): still
+      //   deployable once the user sets an absolute API_BASE_URL, so warn but
+      //   proceed (and the generated Worker guards it at runtime too).
+      if (!resolvedBaseUrl) {
+        throw new Error(
+          'Unable to determine an API base URL for --transport cloudflare-worker. ' +
+            'The spec has no usable `servers` entry — pass --base-url https://host/path.'
+        );
+      }
+      if (!/^https?:\/\//i.test(resolvedBaseUrl)) {
+        console.error(
+          `Warning: the resolved API base URL "${resolvedBaseUrl}" is not absolute. ` +
+            `The generated Worker needs an absolute upstream URL — pass --base-url ` +
+            `https://host/path, or set API_BASE_URL in wrangler.jsonc / via "wrangler secret put" ` +
+            `before deploying.`
+        );
+      }
+      const files = generateCloudflareWorkerFiles({
+        tools,
+        serverName,
+        serverVersion,
+        securitySchemes: api.components?.securitySchemes,
+        baseUrl: resolvedBaseUrl,
+      });
+
+      // Each file's parent directory is created per-iteration below, so no
+      // separate srcDir mkdir is needed here.
+      for (const file of files) {
+        const dest = path.join(outputDir, file.path);
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.writeFile(dest, file.content);
+        console.error(` -> Created ${dest}`);
+      }
+
+      console.error('\n---');
+      console.error(`Cloudflare Worker MCP project '${serverName}' generated at: ${outputDir}`);
+      console.error('\nNext steps:');
+      console.error(`1. cd ${outputDir}`);
+      console.error(`2. npm install`);
+      console.error(
+        `3. Set secrets: npx wrangler secret put <NAME>  (see README.md / .dev.vars.example)`
+      );
+      console.error(`4. Deploy: npx wrangler deploy`);
+      console.error('---');
+      return;
+    }
 
     console.error('Generating server code...');
     const serverTsContent = generateMcpServerCode(api, options, serverName, serverVersion);

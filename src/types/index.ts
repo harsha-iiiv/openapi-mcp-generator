@@ -9,7 +9,7 @@ import type { JSONSchema7 } from 'json-schema';
 /**
  * Transport types supported by the MCP server
  */
-export type TransportType = 'stdio' | 'web' | 'streamable-http';
+export type TransportType = 'stdio' | 'web' | 'streamable-http' | 'cloudflare-worker';
 
 /**
  * CLI options for the generator

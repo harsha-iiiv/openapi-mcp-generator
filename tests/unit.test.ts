@@ -29,6 +29,8 @@ import {
   generateHttpSecurityCode,
 } from '../src/utils/security.js';
 import { generateMcpServerCode, generateCustomAuthStub } from '../src/generator/server-code.js';
+import { generateCloudflareWorkerFiles } from '../src/generator/cloudflare-worker.js';
+import { getToolsFromOpenApi } from '../src/api.js';
 import type { McpToolDefinition } from '../src/types/index.js';
 
 // --- #67: template-literal injection ---------------------------------------
@@ -500,5 +502,272 @@ describe('generated tool definition map shape', () => {
     expect(code).toContain('pathTemplate: "/x"');
     expect(code).toContain('tags: ["t"]');
     expect(code).toContain('deprecated: false');
+  });
+});
+
+// --- cloudflare-worker target ----------------------------------------------
+
+describe('cloudflare-worker target', () => {
+  it('exposes a generator that returns the expected file set', () => {
+    const files = generateCloudflareWorkerFiles(
+      // minimal stub: empty tools, name/version
+      {
+        tools: [],
+        serverName: 'test-mcp',
+        serverVersion: '0.1.0',
+        securitySchemes: undefined,
+        baseUrl: 'https://api.example.com',
+      }
+    );
+    const paths = files.map((f) => f.path).sort();
+    expect(paths).toEqual(
+      [
+        '.dev.vars.example',
+        '.gitignore',
+        'README.md',
+        'package.json',
+        'src/index.ts',
+        'src/tools.ts',
+        'tsconfig.json',
+        'wrangler.jsonc',
+      ].sort()
+    );
+  });
+
+  it('generates a .gitignore that excludes local secrets but keeps the example', () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'test-mcp',
+      serverVersion: '0.1.0',
+      securitySchemes: undefined,
+      baseUrl: 'https://api.example.com',
+    });
+    const gitignore = fileContent(files, '.gitignore');
+    expect(gitignore).toContain('.dev.vars');
+    expect(gitignore).toContain('node_modules/');
+    expect(gitignore).toContain('.wrangler/');
+    // The committed template must stay tracked.
+    expect(gitignore).toContain('!.dev.vars.example');
+  });
+
+  it('treats an http scheme as Basic regardless of casing (e.g. "Basic")', () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'test-mcp',
+      serverVersion: '0.1.0',
+      securitySchemes: {
+        basicAuth: { type: 'http', scheme: 'Basic' },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://api.example.com',
+    });
+    // Embedded metadata is normalized to lowercase so the runtime `=== 'basic'`
+    // check matches and the username/password env vars (not a bearer token) are used.
+    const index = fileContent(files, 'src/index.ts');
+    expect(index).toContain('"scheme": "basic"');
+    const devVars = fileContent(files, '.dev.vars.example');
+    expect(devVars).toContain('BASICAUTH_USERNAME');
+    expect(devVars).toContain('BASICAUTH_PASSWORD');
+    expect(devVars).not.toContain('BASICAUTH_TOKEN');
+  });
+
+  const petstorePath = fileURLToPath(new URL('./fixtures/real-petstore.json', import.meta.url));
+  const fileContent = (
+    files: ReturnType<typeof generateCloudflareWorkerFiles>,
+    path: string
+  ): string => {
+    const f = files.find((x) => x.path === path);
+    if (!f) throw new Error(`missing generated file: ${path}`);
+    return f.content;
+  };
+
+  it('emits a Workers-native src/index.ts (no node/process/eval, no hardcoded header)', async () => {
+    const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
+    const files = generateCloudflareWorkerFiles({
+      tools,
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: undefined,
+      baseUrl: 'https://petstore.example.com',
+    });
+    const index = fileContent(files, 'src/index.ts');
+
+    expect(index).toContain("import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'");
+    expect(index).toContain(
+      "import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'"
+    );
+    expect(index).toContain("const MCP_ROUTE = '/mcp'");
+    expect(index).toContain('new WebStandardStreamableHTTPServerTransport()');
+    expect(index).toContain('transport.handleRequest(request)');
+    expect(index).toContain('await fetch(');
+    // No dependency on the Cloudflare `agents` package (raw SDK transport only).
+    expect(index).not.toContain('agents/mcp');
+    expect(index).not.toContain('node:https');
+    expect(index).not.toContain('process.env');
+    expect(index).not.toMatch(/\beval\s*\(/);
+    expect(index).not.toContain('x-api-key');
+  });
+
+  it('emits src/tools.ts with embedded names + build-time zod and no eval', async () => {
+    const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
+    expect(tools.length).toBeGreaterThan(0);
+    const files = generateCloudflareWorkerFiles({
+      tools,
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: undefined,
+      baseUrl: 'https://petstore.example.com',
+    });
+    const toolsFile = fileContent(files, 'src/tools.ts');
+
+    expect(toolsFile).toContain(JSON.stringify(tools[0].name));
+    expect(toolsFile).toContain('export const toolDefinitionMap');
+    expect(toolsFile).toContain('export const toolZodShapes');
+    expect(toolsFile).toContain("import { z } from 'zod'");
+    expect(toolsFile).not.toMatch(/\beval\s*\(/);
+  });
+
+  it('keeps secrets out of wrangler.jsonc and lists the api-key var in .dev.vars.example', async () => {
+    const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
+    const files = generateCloudflareWorkerFiles({
+      tools,
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: {
+        apiKeyAuth: { type: 'apiKey', in: 'header', name: 'X-API-Key' },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://petstore.example.com',
+    });
+    const wrangler = fileContent(files, 'wrangler.jsonc');
+    expect(wrangler).toContain('"nodejs_compat"');
+    expect(wrangler).toContain('"API_BASE_URL"');
+    expect(wrangler).toContain('"main": "src/index.ts"');
+    expect(wrangler).not.toMatch(/API_KEY/i);
+
+    const devVars = fileContent(files, '.dev.vars.example');
+    expect(devVars).toContain('APIKEYAUTH_API_KEY');
+  });
+
+  it('places an apiKey in=query scheme into url.searchParams', async () => {
+    const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
+    const files = generateCloudflareWorkerFiles({
+      tools,
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: {
+        qkey: { type: 'apiKey', in: 'query', name: 'api_key' },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://petstore.example.com',
+    });
+    const index = fileContent(files, 'src/index.ts');
+
+    expect(index).toContain('SECURITY_SCHEMES');
+    expect(index).toContain('"in": "query"');
+    expect(index).toContain('"name": "api_key"');
+    expect(index).toContain('url.searchParams.set');
+  });
+
+  it('emits an oauth2 client-credentials token fetch (with scope forwarding) and dev vars', async () => {
+    const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
+    const files = generateCloudflareWorkerFiles({
+      tools,
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: {
+        oauth: {
+          type: 'oauth2',
+          flows: { clientCredentials: { tokenUrl: 'https://auth.example.com/token', scopes: {} } },
+        },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://petstore.example.com',
+    });
+    const index = fileContent(files, 'src/index.ts');
+
+    // Token request is built with URLSearchParams (grant_type + optional scope).
+    expect(index).toContain("grant_type: 'client_credentials'");
+    expect(index).toContain('tokenUrl');
+    // Scopes from the operation's securityRequirements are forwarded.
+    expect(index).toContain("tokenBody.set('scope'");
+
+    const devVars = fileContent(files, '.dev.vars.example');
+    expect(devVars).toContain('OAUTH_CLIENT_ID');
+    expect(devVars).toContain('OAUTH_CLIENT_SECRET');
+  });
+
+  it('emits an oauth2 TOKEN_URL secret hint when the spec omits the token URL', async () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: {
+        oauth: { type: 'oauth2', flows: {} },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://petstore.example.com',
+    });
+    const devVars = fileContent(files, '.dev.vars.example');
+    const readme = fileContent(files, 'README.md');
+    // Both the dev vars and the README deploy steps must mention TOKEN_URL.
+    expect(devVars).toContain('OAUTH_TOKEN_URL');
+    expect(readme).toContain('OAUTH_TOKEN_URL');
+  });
+
+  it('places an http bearer scheme into an Authorization header from a TOKEN secret', async () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: {
+        bearerAuth: { type: 'http', scheme: 'bearer' },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://petstore.example.com',
+    });
+    const index = fileContent(files, 'src/index.ts');
+    // The scheme metadata is embedded; the env-var name is derived at runtime
+    // from the scheme name (`${upper}_TOKEN`), not baked into the source.
+    expect(index).toContain('"type": "http"');
+    expect(index).toContain('"scheme": "bearer"');
+    expect(index).toContain('${upper}_TOKEN');
+    expect(index).toContain('Bearer ${token}');
+
+    // The concrete secret name is what the user must set, documented in dev vars.
+    const devVars = fileContent(files, '.dev.vars.example');
+    expect(devVars).toContain('BEARERAUTH_TOKEN');
+  });
+
+  it('places an apiKey in=cookie scheme into an encoded Cookie header', async () => {
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: {
+        ckey: { type: 'apiKey', in: 'cookie', name: 'session' },
+      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+      baseUrl: 'https://petstore.example.com',
+    });
+    const index = fileContent(files, 'src/index.ts');
+    expect(index).toContain('"in": "cookie"');
+    expect(index).toContain('"name": "session"');
+    expect(index).toContain("headers['cookie']");
+    // Cookie value is URL-encoded to stay RFC 6265 safe.
+    expect(index).toContain('encodeURIComponent(key)');
+  });
+
+  it('guards against a non-absolute base URL at runtime with an actionable error', async () => {
+    const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
+    const files = generateCloudflareWorkerFiles({
+      tools,
+      serverName: 'petstore-mcp',
+      serverVersion: '1.0.0',
+      securitySchemes: undefined,
+      // A relative base URL (common when the spec's server is e.g. "/api/v3").
+      baseUrl: '/api/v3',
+    });
+    const index = fileContent(files, 'src/index.ts');
+    // The Workers runtime can't build a request from a relative base URL; the
+    // generated code must check for an absolute http(s) URL and return an MCP
+    // error explaining how to fix it, rather than throwing "Invalid URL string".
+    expect(index).toContain('is not absolute');
+    expect(index).toContain('API_BASE_URL');
+    // It checks for an http(s) scheme before constructing the URL.
+    expect(index).toMatch(/test\(baseUrl\)/);
   });
 });
