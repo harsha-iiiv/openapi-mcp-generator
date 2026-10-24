@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking: MCP 2026-07-28 via MCP TypeScript SDK v2 (#79)
+
+- Generated servers depend on `@modelcontextprotocol/server` (SDK v2) instead of
+  `@modelcontextprotocol/sdk`, and serve both protocol eras: MCP 2026-07-28 clients
+  (`server/discover`, per-request metadata, no sessions) and 2025-era clients (`initialize`).
+  Regenerate and run `npm install`; customized code that imported from
+  `@modelcontextprotocol/sdk` must update its imports.
+  - stdio: `serveStdio` selects the era from each connection's opening message.
+  - streamable-http and cloudflare-worker: `createMcpHandler` serves every request
+    statelessly. 2025-era clients are served without sessions (GET and DELETE answer `405`),
+    so servers scale behind any load balancer.
+  - web (SSE) stays on the 2025-era protocol, because the specification deprecates HTTP+SSE.
+- The Worker registers tools on the low-level server, validates arguments with the
+  build-time zod shapes, and returns the original JSON Schema from `tools/list`.
+- Verified with the official v2 client pinned to 2026-07-28 on stdio, Streamable HTTP and the
+  Worker, and with the v1 client for the 2025 era.
+
 ### Added
 
 - `--inbound-auth bearer` (#80): HTTP transports (`web`, `streamable-http`,

@@ -96,6 +96,7 @@ main().catch((error) => {
   // Port resolution order: explicit --port, then PORT env var, then 3000 (issue #50).
   let transportImport = '';
   let transportCode = '';
+  let stdioImport = '';
   // Treat an explicit --port (including 0, "let the OS pick") as set; only fall
   // back to PORT/3000 when no port was provided (issue #50).
   const portExpr =
@@ -124,11 +125,14 @@ main().catch((error) => {
       break;
     default: // stdio
       transportImport = '';
-      transportCode = `// Set up stdio transport
+      stdioImport = `\nimport { serveStdio } from "@modelcontextprotocol/server/stdio";`;
+      transportCode = `// Set up stdio transport. serveStdio picks the era from the client's opening
+  // message: MCP 2026-07-28 (server/discover and per-request metadata) or a
+  // 2025-era initialize handshake. Each connection gets its own server instance.
   try {
-    const server = createServer();
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
+    serveStdio(() => createServer(), {
+      onerror: (error) => console.error('MCP stdio error:', error),
+    });
     console.error(\`\${SERVER_NAME} MCP Server (v\${SERVER_VERSION}) running on stdio\${API_BASE_URL ? \`, proxying API at \${API_BASE_URL}\` : ''}\`);
   } catch (error) {
     console.error("Error during server startup:", error);
@@ -148,15 +152,7 @@ main().catch((error) => {
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  type Tool,
-  type CallToolResult,
-  type CallToolRequest
-} from "@modelcontextprotocol/sdk/types.js";${transportImport}
+import { Server, type Tool, type CallToolResult, type CallToolRequest } from "@modelcontextprotocol/server";${stdioImport}${transportImport}
 
 import { z, ZodError } from 'zod';
 import { jsonSchemaToZod } from 'json-schema-to-zod';
@@ -206,8 +202,9 @@ const securitySchemes = ${JSON.stringify(api.components?.securitySchemes || {}, 
 
 /**
  * Creates a fresh MCP server instance with the tool handlers registered.
- * HTTP transports call this once per session or connection, because an SDK
- * server instance can only be connected to one transport at a time (SDK >= 1.26).
+ * Transports call this once per request, connection or era probe: an SDK server
+ * instance serves exactly one transport, and the same factory backs both the
+ * 2026-07-28 and 2025-era protocols.
  */
 export function createServer(): Server {
   const server = new Server(

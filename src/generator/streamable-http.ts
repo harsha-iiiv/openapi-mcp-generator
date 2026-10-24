@@ -53,40 +53,21 @@ function collectInboundHeaders(c: Context<AppEnv>): Record<string, string> {
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
-import { randomUUID } from 'node:crypto';
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";${contextImport}${headerStoreImport}${generateNodeInboundAuthImports(inboundAuth)}
+import { createMcpHandler, type Server } from "@modelcontextprotocol/server";${contextImport}${headerStoreImport}${generateNodeInboundAuthImports(inboundAuth)}
 
 // Import server configuration constants
 import { SERVER_NAME, SERVER_VERSION } from './index.js';
 
-/** Creates a fresh MCP server instance; one per session (SDK >= 1.26). */
+/** Creates a fresh MCP server instance for one request. */
 type ServerFactory = () => Server;
 
 /** Hono context variables set by middleware. */
 type AppEnv = { Variables: { inboundPrincipal?: string } };
-
-/** An open MCP session: its transport and the credential digest that opened it. */
-interface Session {
-  transport: WebStandardStreamableHTTPServerTransport;
-  principal?: string;
-}
 ${generateNodeOriginGuard()}${generateNodeInboundAuthMiddleware(inboundAuth)}${collectHeadersFn}
-/** JSON-RPC error body for transport-level failures. */
-function jsonRpcError(code: number, message: string) {
-  return { jsonrpc: '2.0' as const, error: { code, message }, id: null };
-}
-
-/** True when a request body is, or contains, an initialize request. */
-function containsInitialize(body: unknown): boolean {
-  return Array.isArray(body) ? body.some((message) => isInitializeRequest(message)) : isInitializeRequest(body);
-}
-
 /**
  * Sets up a web server for the MCP server using StreamableHTTP transport
  * 
- * @param createServer Factory returning a fresh MCP server for each session
+ * @param createServer Factory returning a fresh MCP server for each request
  * @param port The port to listen on (default: ${port})
  * @returns The Hono app instance
  */
@@ -94,67 +75,24 @@ export async function setupStreamableHttpServer(createServer: ServerFactory, por
   // Create Hono app
   const app = new Hono<AppEnv>();
   
-  // Enable CORS and expose the session header to browser clients
-  app.use('*', cors({ exposeHeaders: ['mcp-session-id'] }));
+  // Enable CORS (request headers such as Mcp-Method and Mcp-Name are reflected)
+  app.use('*', cors());
 ${generateNodeInboundAuthMounts(inboundAuth, ['/mcp'])}
-  // Open sessions by ID. Each session owns its own server instance, so
-  // concurrent clients never share protocol state.
-  const sessions = new Map<string, Session>();
+  // One handler serves both protocol eras per request: MCP 2026-07-28
+  // (server/discover, per-request metadata) and 2025-era clients through
+  // stateless serving. Every request gets a fresh server, so nothing is shared
+  // between clients and the server scales behind any load balancer.
+  const mcpHandler = createMcpHandler(() => createServer(), {
+    onerror: (error) => console.error('MCP request error:', error),
+  });
   
   // Add a simple health check endpoint
   app.get('/health', (c) => {
     return c.json({ status: 'OK', server: SERVER_NAME, version: SERVER_VERSION });
   });
   
-  // MCP endpoint: POST carries messages, GET opens the server-to-client stream,
-  // DELETE ends the session.
-  app.all('/mcp', async (c) => {
-    const sessionId = c.req.header('mcp-session-id');
-    const principal = c.get('inboundPrincipal');
-
-    if (sessionId) {
-      const session = sessions.get(sessionId);
-      // Unknown session, or a different credential than the one that opened it:
-      // answer exactly as if the session did not exist.
-      if (!session || session.principal !== principal) {
-        return c.json(jsonRpcError(-32001, 'Session not found'), 404);
-      }
-      return ${withHeaders('session.transport.handleRequest(c.req.raw)')};
-    }
-
-    if (c.req.method !== 'POST') {
-      return c.json(jsonRpcError(-32000, 'Bad Request: missing mcp-session-id header.'), 400);
-    }
-
-    let body: unknown;
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json(jsonRpcError(-32700, 'Parse error: invalid JSON.'), 400);
-    }
-    if (!containsInitialize(body)) {
-      return c.json(jsonRpcError(-32000, 'Bad Request: no valid session ID or initialize request.'), 400);
-    }
-
-    // New session: a fresh server + transport pair, bound to the opening credential.
-    const transport: WebStandardStreamableHTTPServerTransport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (id) => {
-        console.error(\`New session established: \${id}\`);
-        sessions.set(id, { transport, principal });
-      },
-      onsessionclosed: (id) => {
-        console.error(\`Session closed: \${id}\`);
-        sessions.delete(id);
-      },
-    });
-    transport.onerror = (err) => {
-      console.error('StreamableHTTP transport error:', err);
-    };
-    const server = createServer();
-    await server.connect(transport);
-    return ${withHeaders('transport.handleRequest(c.req.raw, { parsedBody: body })')};
-  });
+  // MCP endpoint
+  app.all('/mcp', (c) => ${withHeaders('mcpHandler.fetch(c.req.raw)')});
   
   // Static files for the web client (if any)
   app.get('/*', async (c) => {

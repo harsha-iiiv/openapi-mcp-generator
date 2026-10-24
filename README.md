@@ -129,6 +129,11 @@ Core dependencies:
 
 ## 📡 Transport Modes
 
+Generated servers speak **MCP 2026-07-28** (stateless requests, `server/discover`) and keep
+serving **2025-era clients** that open with `initialize`, using the MCP TypeScript SDK v2. The
+`web` (SSE) transport stays on the 2025-era protocol because the specification deprecates
+HTTP+SSE; prefer `streamable-http` for new deployments.
+
 ### Stdio (Default)
 
 Communicates with MCP clients via standard input/output. Ideal for local development or integration with LLM tools.

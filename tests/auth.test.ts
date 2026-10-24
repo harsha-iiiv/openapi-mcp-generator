@@ -22,6 +22,11 @@ import {
   getDefaultEnvironment,
 } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+  Client as ModernClient,
+  StreamableHTTPClientTransport as ModernHttpTransport,
+} from '@modelcontextprotocol/client';
+import { StdioClientTransport as ModernStdioTransport } from '@modelcontextprotocol/client/stdio';
 
 import { extractToolsFromApi } from '../src/parser/extract-tools.js';
 import { generateCloudflareWorkerFiles } from '../src/generator/cloudflare-worker.js';
@@ -495,6 +500,24 @@ describe('#80 inbound auth and #55 header passthrough: cloudflare-worker', () =>
     expect(seen.headers['authorization']).toBe('Bearer tok-read');
   });
 
+  it('serves a 2026-07-28 client in-process (fetch handler)', async () => {
+    const env = { MCP_AUTH_TOKEN: 'correct-token', APIKEYQUERY_API_KEY: 'query-key' };
+    const modern = new ModernClient(
+      { name: 'modern-worker', version: '1.0.0' },
+      { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+    );
+    await modern.connect(
+      new ModernHttpTransport(new URL('https://worker.test/mcp'), {
+        requestInit: { headers: { authorization: 'Bearer correct-token' } },
+        fetch: (url, init) => worker.fetch(new Request(url, init), env),
+      })
+    );
+    expect(modern.getProtocolEra()).toBe('modern');
+    await modern.callTool({ name: 'orAlternatives', arguments: {} });
+    expect(lastRequest(upstream, '/or').query.api_key).toBe('query-key');
+    await modern.close();
+  });
+
   it('keeps the endpoint public by default (no --inbound-auth)', async () => {
     const res = await openWorker.fetch(mcpRequest(initializeBody), {});
     expect(res.status).toBe(200);
@@ -577,6 +600,27 @@ describe('#81 security requirements: generated Node server (stdio)', () => {
     const unknown = await client.callTool({ name: 'no_such_tool', arguments: {} });
     expect(unknown.isError).toBe(true);
   });
+
+  it('serves a 2026-07-28 client over stdio (server/discover, per-request metadata)', async () => {
+    const outDir = path.join(workdir, 'node-stdio');
+    const modern = new ModernClient(
+      { name: 'modern-stdio', version: '1.0.0' },
+      { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+    );
+    await modern.connect(
+      new ModernStdioTransport({
+        command: 'node',
+        args: [path.join(outDir, 'build', 'index.js')],
+        cwd: outDir,
+        stderr: 'pipe',
+        env: { ...getDefaultEnvironment(), API_KEY_APIKEYHEADER: 'header-key' },
+      })
+    );
+    expect(modern.getProtocolEra()).toBe('modern');
+    await modern.callTool({ name: 'optionalAuth', arguments: {} });
+    expect(lastRequest(upstream, '/optional').headers['x-api-key']).toBe('header-key');
+    await modern.close();
+  }, 60_000);
 
   it('requests a token for the full scope set of the operation', async () => {
     await callTool('scopedOauth');
@@ -661,7 +705,7 @@ describe('#80 inbound auth: generated Node HTTP servers', () => {
     await client.close();
   }, 60_000);
 
-  it('streamable-http: serves concurrent sessions and binds each to its opening token', async () => {
+  it('streamable-http: serves concurrent clients statelessly, authenticating every request', async () => {
     const port = await freePort();
     const child = startNodeServer(httpDir, {
       PORT: String(port),
@@ -679,29 +723,50 @@ describe('#80 inbound auth: generated Node HTTP servers', () => {
       await client.connect(transport);
       return { client, transport };
     };
-    // Two live sessions at once: each gets its own server instance.
+    // Two clients at once: each request gets its own server instance.
     const [a, b] = await Promise.all([connect('token-a'), connect('token-b')]);
     const [toolsA, toolsB] = await Promise.all([a.client.listTools(), b.client.listTools()]);
     expect(toolsA.tools.length).toBeGreaterThan(0);
     expect(toolsB.tools.length).toBe(toolsA.tools.length);
-
-    // Replaying session A's id with token B is answered as an unknown session.
-    const hijack = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    // Stateless serving issues no session id, so there is nothing to replay...
+    expect(a.transport.sessionId).toBeUndefined();
+    // ...and a request without the token is refused even mid-conversation.
+    const anonymous = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
-        authorization: 'Bearer token-b',
-        'mcp-session-id': a.transport.sessionId ?? '',
         'mcp-protocol-version': '2025-06-18',
       },
       body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/list', params: {} }),
     });
-    expect(hijack.status).toBe(404);
-
-    // Session A still works for its own token.
-    expect((await a.client.listTools()).tools.length).toBe(toolsA.tools.length);
+    expect(anonymous.status).toBe(401);
     await Promise.all([a.client.close(), b.client.close()]);
+  }, 60_000);
+
+  it('streamable-http: a 2026-07-28 client negotiates the modern era', async () => {
+    const port = await freePort();
+    const child = startNodeServer(httpDir, {
+      PORT: String(port),
+      MCP_AUTH_TOKEN: token,
+      API_BASE_URL: upstream.url,
+    });
+    children.push(child);
+    await waitForHealth(port, child);
+    const client = new ModernClient(
+      { name: 'modern-http', version: '1.0.0' },
+      { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+    );
+    await client.connect(
+      new ModernHttpTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${token}` } },
+      })
+    );
+    expect(client.getProtocolEra()).toBe('modern');
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain('publicEndpoint');
+    const result = await client.callTool({ name: 'publicEndpoint', arguments: {} });
+    expect(result.isError ?? false).toBe(false);
+    await client.close();
   }, 60_000);
 
   it('streamable-http: rejects browser requests from non-allowed origins (DNS rebinding)', async () => {

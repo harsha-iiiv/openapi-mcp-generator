@@ -90,7 +90,7 @@ export function generateToolDefinitionMap(
  */
 export function generateListToolsHandler(): string {
   return `
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+server.setRequestHandler('tools/list', async () => {
   const toolsForClient: Tool[] = Array.from(toolDefinitionMap.values()).map(def => ({
     name: def.name,
     description: def.description,
@@ -108,7 +108,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
  */
 export function generateCallToolHandler(): string {
   return `
-server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest): Promise<CallToolResult> => {
+server.setRequestHandler('tools/call', async (request: CallToolRequest): Promise<CallToolResult> => {
   const { name: toolName, arguments: toolArgs } = request.params;
   const toolDefinition = toolDefinitionMap.get(toolName);
   if (!toolDefinition) {
