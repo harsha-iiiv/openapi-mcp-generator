@@ -158,6 +158,52 @@ describe('integration: generate + typecheck', () => {
     }
   });
 
+  it('applies --include/--exclude tag and operation filters to every target', () => {
+    const spec = path.join(workdir, 'filters.json');
+    const op = (operationId: string, tags: string[]) => ({
+      operationId,
+      tags,
+      responses: { '200': { description: 'ok' } },
+    });
+    fs.writeFileSync(
+      spec,
+      JSON.stringify({
+        openapi: '3.0.3',
+        info: { title: 'filters', version: '1' },
+        servers: [{ url: 'https://api.example.com' }],
+        paths: {
+          '/pets': { get: op('listPets', ['pets']), delete: op('deletePets', ['pets', 'admin']) },
+          '/stores': { get: op('listStores', ['stores']) },
+          '/orders': { get: op('listOrders', ['orders']) },
+        },
+      })
+    );
+    const args = [
+      '--include-tags',
+      'Pets,Stores',
+      '--include-operations',
+      'listOrders',
+      '--exclude-tags',
+      'admin',
+      '--exclude-operations',
+      'listStores',
+    ];
+    for (const [transport, file] of [
+      ['stdio', 'src/index.ts'],
+      ['cloudflare-worker', 'src/tools.ts'],
+    ]) {
+      const out = path.join(workdir, `filters-${transport}`);
+      execFileSync(
+        'node',
+        [cliEntry, '-i', spec, '-o', out, '--force', '--transport', transport, ...args],
+        { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }
+      );
+      const source = fs.readFileSync(path.join(out, file), 'utf8');
+      const toolNames = [...source.matchAll(/^\s*name: "([^"]+)"/gm)].map((m) => m[1]);
+      expect(toolNames, transport).toEqual(['listPets', 'listOrders']);
+    }
+  });
+
   it('rejects external $ref by default (SSRF guard)', () => {
     const badSpec = path.join(workdir, 'bad.json');
     fs.writeFileSync(

@@ -647,3 +647,71 @@ export function mapOpenApiSchemaToJsonSchema(
     seen.delete(schema);
   }
 }
+
+/** Tag and operation filters applied after x-mcp filtering. */
+export interface ToolFilterOptions {
+  /** Keep only tools with at least one of these tags (case-insensitive). */
+  includeTags?: string[];
+  /** Drop tools with any of these tags (case-insensitive). */
+  excludeTags?: string[];
+  /** Keep only these operations (operationId or generated tool name). */
+  includeOperations?: string[];
+  /** Drop these operations (operationId or generated tool name). */
+  excludeOperations?: string[];
+}
+
+/**
+ * Applies tag and operation filters. When any include list is given, a tool is
+ * kept if it matches one of them (a listed tag or a listed operation); every
+ * exclusion then removes matching tools, so exclusions win over inclusions.
+ * Filter values that match no tool are reported with a warning.
+ */
+export function filterTools(
+  tools: McpToolDefinition[],
+  filters: ToolFilterOptions = {}
+): McpToolDefinition[] {
+  const clean = (values?: string[]) =>
+    (Array.isArray(values) ? values : []).map((v) => v.trim()).filter(Boolean);
+  const includeTags = clean(filters.includeTags).map((t) => t.toLowerCase());
+  const excludeTags = clean(filters.excludeTags).map((t) => t.toLowerCase());
+  const includeOperations = clean(filters.includeOperations);
+  const excludeOperations = clean(filters.excludeOperations);
+  if (
+    includeTags.length +
+      excludeTags.length +
+      includeOperations.length +
+      excludeOperations.length ===
+    0
+  ) {
+    return tools;
+  }
+
+  const tagsOf = (tool: McpToolDefinition) => (tool.tags ?? []).map((t) => t.toLowerCase());
+  const isOperation = (tool: McpToolDefinition, value: string) =>
+    tool.operationId === value || tool.name === value;
+  const warnUnmatched = (flag: string, values: string[], matches: (value: string) => boolean) => {
+    for (const value of values) {
+      if (!matches(value)) console.warn(`Warning: ${flag} '${value}' matches no operation.`);
+    }
+  };
+  warnUnmatched('--include-tags', includeTags, (tag) => tools.some((t) => tagsOf(t).includes(tag)));
+  warnUnmatched('--exclude-tags', excludeTags, (tag) => tools.some((t) => tagsOf(t).includes(tag)));
+  warnUnmatched('--include-operations', includeOperations, (op) =>
+    tools.some((t) => isOperation(t, op))
+  );
+  warnUnmatched('--exclude-operations', excludeOperations, (op) =>
+    tools.some((t) => isOperation(t, op))
+  );
+
+  const hasIncludes = includeTags.length > 0 || includeOperations.length > 0;
+  return tools.filter((tool) => {
+    const tags = tagsOf(tool);
+    if (excludeTags.some((tag) => tags.includes(tag))) return false;
+    if (excludeOperations.some((op) => isOperation(tool, op))) return false;
+    if (!hasIncludes) return true;
+    return (
+      includeTags.some((tag) => tags.includes(tag)) ||
+      includeOperations.some((op) => isOperation(tool, op))
+    );
+  });
+}

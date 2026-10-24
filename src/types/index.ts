@@ -84,6 +84,14 @@ export interface CliOptions {
    * cloudflare-worker). Has no effect on stdio. Default 'none'.
    */
   inboundAuth?: InboundAuthMode;
+  /** Keep only operations with one of these tags (case-insensitive). */
+  includeTags?: string[];
+  /** Drop operations with any of these tags (case-insensitive). Wins over inclusions. */
+  excludeTags?: string[];
+  /** Keep only these operations (operationId or generated tool name). */
+  includeOperations?: string[];
+  /** Drop these operations (operationId or generated tool name). Wins over inclusions. */
+  excludeOperations?: string[];
 }
 
 /**

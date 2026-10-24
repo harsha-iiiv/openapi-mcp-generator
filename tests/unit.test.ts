@@ -23,6 +23,7 @@ import {
   mapOpenApiSchemaToJsonSchema,
   getToolAnnotations,
   getToolTitle,
+  filterTools,
 } from '../src/parser/extract-tools.js';
 import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
 import {
@@ -296,6 +297,64 @@ describe('#73 operation and path-item servers', () => {
     expect(byName.rootLevel.serverUrl).toBeUndefined();
     expect((byName.rootLevel as any).baseUrl).toBe('https://prod.example.com/api');
     expect(generateToolDefinitionMap(tools)).toContain('serverUrl: "/v2",');
+  });
+});
+
+// --- tag and operation filters --------------------------------------------------
+
+describe('tag and operation filters', () => {
+  const op = (operationId: string, tags: string[], extra: object = {}) => ({
+    operationId,
+    tags,
+    responses: { '200': { description: 'ok' } },
+    ...extra,
+  });
+  const api = {
+    openapi: '3.0.3',
+    info: { title: 't', version: '1' },
+    paths: {
+      '/pets': { get: op('listPets', ['Pets']), post: op('createPet', ['pets', 'Admin']) },
+      '/stores': { get: op('list.stores', ['Stores']) },
+      '/users': { get: op('listUsers', ['Users'], { 'x-mcp': false }) },
+      '/health': { get: op('health', []) },
+    },
+  } as unknown as OpenAPIV3.Document;
+  const names = (filters: Parameters<typeof filterTools>[1]) =>
+    filterTools(extractToolsFromApi(api), filters).map((t) => t.name);
+
+  it('keeps everything without filters (after x-mcp)', () => {
+    expect(names({})).toEqual(['listPets', 'createPet', 'list_stores', 'health']);
+  });
+
+  it('includes by tag case-insensitively and by operationId or tool name', () => {
+    expect(names({ includeTags: ['PETS'] })).toEqual(['listPets', 'createPet']);
+    expect(names({ includeOperations: ['list.stores'] })).toEqual(['list_stores']);
+    expect(names({ includeOperations: ['list_stores', 'health'] })).toEqual([
+      'list_stores',
+      'health',
+    ]);
+    // Include lists combine as a union.
+    expect(names({ includeTags: ['stores'], includeOperations: ['health'] })).toEqual([
+      'list_stores',
+      'health',
+    ]);
+  });
+
+  it('lets exclusions win over inclusions', () => {
+    expect(names({ includeTags: ['pets'], excludeTags: ['admin'] })).toEqual(['listPets']);
+    expect(names({ includeTags: ['pets'], excludeOperations: ['listPets'] })).toEqual([
+      'createPet',
+    ]);
+    expect(names({ excludeTags: ['Pets', 'stores'] })).toEqual(['health']);
+  });
+
+  it('never resurrects operations excluded by x-mcp', () => {
+    expect(names({ includeTags: ['users'] })).toEqual([]);
+  });
+
+  it('applies the same filters through the programmatic API', async () => {
+    const tools = await getToolsFromOpenApi(api, { includeTags: ['pets'], excludeTags: ['admin'] });
+    expect(tools.map((t) => t.name)).toEqual(['listPets']);
   });
 });
 

@@ -31,7 +31,7 @@ import {
 import { CliOptions, InboundAuthMode, TransportType } from './types/index.js';
 import { getServerInstructions, normalizeBoolean } from './utils/helpers.js';
 import { parseSpecSecurely } from './utils/parser-security.js';
-import { extractToolsFromApi } from './parser/extract-tools.js';
+import { extractToolsFromApi, filterTools } from './parser/extract-tools.js';
 import { determineBaseUrl } from './utils/url.js';
 import pkg from '../package.json' with { type: 'json' };
 
@@ -42,6 +42,14 @@ export {
   McpToolAnnotations,
   GetToolsOptions,
 } from './api.js';
+
+/** Parses a comma-separated CLI list, dropping blanks. */
+function parseList(value: string): string[] {
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 // Configure CLI
 const program = new Command();
@@ -143,6 +151,26 @@ program
   .option(
     '--oauth-creds-in-body',
     'Send OAuth2 client credentials in the token request body instead of the Basic Authorization header. Default: false.'
+  )
+  .option(
+    '--include-tags <tags>',
+    'Comma-separated tags: generate only operations with one of them (case-insensitive). Applied after x-mcp filtering.',
+    parseList
+  )
+  .option(
+    '--exclude-tags <tags>',
+    'Comma-separated tags: skip operations with any of them (case-insensitive). Exclusions win over inclusions.',
+    parseList
+  )
+  .option(
+    '--include-operations <ids>',
+    'Comma-separated operationIds or tool names: generate only these operations (combined with --include-tags as a union).',
+    parseList
+  )
+  .option(
+    '--exclude-operations <ids>',
+    'Comma-separated operationIds or tool names to skip. Exclusions win over inclusions.',
+    parseList
   )
   .option('--force', 'Overwrite existing files without prompting')
   .version(pkg.version) // Match package.json version
@@ -320,10 +348,9 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       }
 
       console.error('Generating Cloudflare Worker project...');
-      const tools = extractToolsFromApi(
-        api,
-        options.defaultInclude ?? true,
-        options.maxToolNameLength ?? 64
+      const tools = filterTools(
+        extractToolsFromApi(api, options.defaultInclude ?? true, options.maxToolNameLength ?? 64),
+        options
       );
       const resolvedBaseUrl = determineBaseUrl(api, options.baseUrl) || '';
       // Workers' fetch needs an absolute upstream URL.

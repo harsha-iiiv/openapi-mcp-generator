@@ -5,7 +5,7 @@
 
 import SwaggerParser from '@apidevtools/swagger-parser';
 import { OpenAPIV3 } from 'openapi-types';
-import { extractToolsFromApi } from './parser/extract-tools.js';
+import { extractToolsFromApi, filterTools } from './parser/extract-tools.js';
 import { McpToolAnnotations, McpToolDefinition } from './types/index.js';
 import { determineBaseUrl } from './utils/url.js';
 import {
@@ -26,6 +26,18 @@ export interface GetToolsOptions {
 
   /** Array of operation IDs to exclude from the tools list */
   excludeOperationIds?: string[];
+
+  /** Keep only operations with one of these tags (case-insensitive) */
+  includeTags?: string[];
+
+  /** Drop operations with any of these tags (case-insensitive); wins over inclusions */
+  excludeTags?: string[];
+
+  /** Keep only these operations (operationId or generated tool name) */
+  includeOperations?: string[];
+
+  /** Drop these operations (operationId or generated tool name); wins over inclusions */
+  excludeOperations?: string[];
 
   /** Optional filter function to exclude tools based on custom criteria */
   filterFn?: (tool: McpToolDefinition) => boolean;
@@ -94,8 +106,9 @@ export async function getToolsFromOpenApi(
     // Add base URL to each tool
     const baseUrl = determineBaseUrl(api, options.baseUrl);
 
-    // Apply filters to exclude specified operationIds and custom filter function
-    let filteredTools = allTools;
+    // Tag and operation filters (the same rules as the CLI flags), then the
+    // legacy excludeOperationIds list and the custom filter function.
+    let filteredTools = filterTools(allTools, options);
 
     // Filter by excluded operation IDs if provided
     if (options.excludeOperationIds && options.excludeOperationIds.length > 0) {

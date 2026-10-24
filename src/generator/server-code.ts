@@ -1,6 +1,6 @@
 import { OpenAPIV3 } from 'openapi-types';
 import { CliOptions } from '../types/index.js';
-import { extractToolsFromApi } from '../parser/extract-tools.js';
+import { extractToolsFromApi, filterTools } from '../parser/extract-tools.js';
 import { determineBaseUrl } from '../utils/index.js';
 import { getServerInstructions } from '../utils/helpers.js';
 import {
@@ -33,10 +33,9 @@ export function generateMcpServerCode(
   serverVersion: string
 ): string {
   // Extract tools from API
-  const tools = extractToolsFromApi(
-    api,
-    options.defaultInclude ?? true,
-    options.maxToolNameLength ?? 64
+  const tools = filterTools(
+    extractToolsFromApi(api, options.defaultInclude ?? true, options.maxToolNameLength ?? 64),
+    options
   );
 
   // Determine base URL
