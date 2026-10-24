@@ -401,6 +401,17 @@ export function mapOpenApiSchemaToJsonSchema(
     // Create a copy of the schema to modify
     const jsonSchema: JSONSchema7 = { ...schema } as any;
 
+    // OpenAPI 3.0 represents exclusiveMinimum as a boolean paired with minimum,
+    // while JSON Schema expects the exclusive bound itself to be a number.
+    if (typeof jsonSchema.exclusiveMinimum === 'boolean') {
+      if (jsonSchema.exclusiveMinimum && typeof jsonSchema.minimum === 'number') {
+        jsonSchema.exclusiveMinimum = jsonSchema.minimum;
+        delete jsonSchema.minimum;
+      } else {
+        delete jsonSchema.exclusiveMinimum;
+      }
+    }
+
     // Convert integer type to number (JSON Schema compatible)
     if (schema.type === 'integer') jsonSchema.type = 'number';
 

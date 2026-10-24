@@ -19,6 +19,7 @@ import {
   shortenToolName,
   abbreviateToolName,
   splitNameIntoWords,
+  mapOpenApiSchemaToJsonSchema,
 } from '../src/parser/extract-tools.js';
 import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
 import {
@@ -157,6 +158,74 @@ describe('#68 external $ref SSRF guard', () => {
 });
 
 // --- #4: tool name truncation ------------------------------------------------
+
+describe('#77 OpenAPI 3.0 exclusiveMinimum conversion', () => {
+  it('converts the boolean exclusive bound to a JSON Schema numeric bound', () => {
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'number',
+        minimum: 0,
+        exclusiveMinimum: true,
+      } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'number', exclusiveMinimum: 0 });
+  });
+
+  it('preserves minimum when exclusiveMinimum is false', () => {
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'number',
+        minimum: 0,
+        exclusiveMinimum: false,
+      } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'number', minimum: 0 });
+  });
+
+  it('preserves numeric exclusiveMinimum from OpenAPI 3.1', () => {
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'number',
+        exclusiveMinimum: 0,
+      } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'number', exclusiveMinimum: 0 });
+  });
+
+  it('emits the converted bound in an operation request-body input schema', () => {
+    const [tool] = extractToolsFromApi({
+      openapi: '3.0.3',
+      info: { title: 'test', version: '1' },
+      paths: {
+        '/items': {
+          post: {
+            operationId: 'createItem',
+            requestBody: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      size: { type: 'number', minimum: 0, exclusiveMinimum: true },
+                    },
+                  },
+                },
+              },
+            },
+            responses: { '200': { description: 'ok' } },
+          },
+        },
+      },
+    });
+
+    expect(tool.inputSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        requestBody: {
+          type: 'object',
+          properties: { size: { type: 'number', exclusiveMinimum: 0 } },
+        },
+      },
+    });
+  });
+});
 
 describe('#4 tool name truncation', () => {
   it('leaves short names unchanged', () => {
