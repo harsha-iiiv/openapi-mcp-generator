@@ -395,6 +395,11 @@ function defaultCapabilities({ roots, onServerRequest }) {
  *   listen (open the optional GET stream for server messages; default true),
  *   clientInfo, timeoutMs, onTraffic, fetch.
  */
+/** A GET listen stream open at least this long counts as healthy when it ends. */
+const LISTEN_STABLE_MS = 30_000;
+/** Reconnect attempts for GET listen streams that close right after opening. */
+const LISTEN_MAX_RETRIES = 5;
+
 export class McpClient {
   constructor(options = {}) {
     const base = globalThis.location ? globalThis.location.href : undefined;
@@ -1066,14 +1071,19 @@ export class McpClient {
       await res.body?.cancel?.().catch?.(() => {});
       return;
     }
+    const openedAt = Date.now();
     try {
       await this.pumpSse(res, { status: res.status });
     } catch {
       // aborted on disconnect, or the stream broke
     }
-    if (this.connected && this.listenAbort === controller && attempt < 5) {
-      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-      if (this.connected && this.listenAbort === controller) this.openListenStream(attempt + 1);
+    // Proxies and load balancers close idle streams (Cloudflare after about 100 s), so a
+    // stream that stayed open a while starts a fresh retry budget. Streams that close at
+    // once keep counting, and the client gives up after LISTEN_MAX_RETRIES of those.
+    const retry = Date.now() - openedAt >= LISTEN_STABLE_MS ? 0 : attempt;
+    if (this.connected && this.listenAbort === controller && retry < LISTEN_MAX_RETRIES) {
+      await new Promise((r) => setTimeout(r, 1000 * (retry + 1)));
+      if (this.connected && this.listenAbort === controller) this.openListenStream(retry + 1);
     }
   }
 

@@ -531,3 +531,35 @@ describe('client: JSON-RPC errors', () => {
     }
   });
 });
+
+describe('GET listen stream reconnects', () => {
+  // Each stub stream stays open for the given time, then ends as a proxy would end it.
+  async function run(lifetimeMs: number, totalMs: number): Promise<number> {
+    vi.useFakeTimers();
+    try {
+      const client = new McpClient({ url: 'https://mcp.example.com/mcp' }) as any;
+      client.connected = true;
+      let opened = 0;
+      client.httpRequest = async () => {
+        opened += 1;
+        return new Response('', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      };
+      client.pumpSse = () => new Promise((resolve) => setTimeout(resolve, lifetimeMs));
+      client.openListenStream();
+      await vi.advanceTimersByTimeAsync(totalMs);
+      client.connected = false;
+      return opened;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('gives up after five streams that close right after opening', async () => {
+    expect(await run(0, 10 * 60_000)).toBe(6);
+  });
+
+  it('keeps reconnecting when each stream stayed open, as behind an idle-closing proxy', async () => {
+    // Ten streams of 100 s each: the old counter stopped after the sixth.
+    expect(await run(100_000, 10 * 101_500)).toBeGreaterThanOrEqual(10);
+  });
+});
