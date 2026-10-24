@@ -5,7 +5,7 @@ import { OpenAPIV3 } from 'openapi-types';
 import type { JSONSchema7, JSONSchema7TypeName } from 'json-schema';
 import { createHash } from 'crypto';
 import { generateOperationId } from '../utils/code-gen.js';
-import { McpToolDefinition } from '../types/index.js';
+import { McpToolAnnotations, McpToolDefinition } from '../types/index.js';
 import { shouldIncludeOperationForMcp } from '../utils/helpers.js';
 
 /** Default maximum tool name length (Claude Desktop limit). */
@@ -129,6 +129,85 @@ export function truncateToolName(name: string, maxLength: number): string {
   return `${head}${ELISION_MARKER}${tail}${hashSuffix}`.slice(0, maxLength);
 }
 
+/** The boolean hints `x-mcp-annotations` may override. */
+const ANNOTATION_HINTS = [
+  'readOnlyHint',
+  'destructiveHint',
+  'idempotentHint',
+  'openWorldHint',
+] as const;
+
+/**
+ * MCP tool annotations for an operation: defaults from the HTTP method's
+ * semantics (RFC 9110 safe and idempotent methods), then any boolean hints from
+ * the operation's `x-mcp-annotations` object.
+ */
+export function getToolAnnotations(method: string, operation: object): McpToolAnnotations {
+  let annotations: McpToolAnnotations;
+  switch (method.toLowerCase()) {
+    case 'get':
+    case 'head':
+    case 'options':
+    case 'trace':
+      annotations = { readOnlyHint: true, openWorldHint: true };
+      break;
+    case 'put':
+    case 'delete':
+      annotations = {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      };
+      break;
+    case 'patch':
+      annotations = {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      };
+      break;
+    default: // post and anything unknown
+      annotations = {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      };
+  }
+  const overrides = (operation as Record<string, unknown>)['x-mcp-annotations'];
+  if (overrides !== undefined) {
+    if (overrides === null || typeof overrides !== 'object' || Array.isArray(overrides)) {
+      console.warn(
+        `Ignoring x-mcp-annotations: expected an object, got ${JSON.stringify(overrides)}.`
+      );
+    } else {
+      for (const [key, value] of Object.entries(overrides)) {
+        if ((ANNOTATION_HINTS as readonly string[]).includes(key) && typeof value === 'boolean') {
+          annotations[key as (typeof ANNOTATION_HINTS)[number]] = value;
+        } else {
+          console.warn(
+            `Ignoring x-mcp-annotations.${key}: expected one of ${ANNOTATION_HINTS.join(', ')} with a boolean value.`
+          );
+        }
+      }
+    }
+  }
+  return annotations;
+}
+
+/**
+ * Display title for an operation: `x-mcp-title`, else the trimmed summary.
+ */
+export function getToolTitle(operation: object): string | undefined {
+  const record = operation as Record<string, unknown>;
+  for (const candidate of [record['x-mcp-title'], record.summary]) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
 /**
  * Extracts tool definitions from an OpenAPI document
  *
@@ -248,8 +327,10 @@ export function extractToolsFromApi(
       const deprecated = operation.deprecated === true;
 
       // Create the tool definition
+      const title = getToolTitle(operation);
       tools.push({
         name: finalToolName,
+        ...(title !== undefined && { title }),
         description,
         inputSchema,
         method,
@@ -261,6 +342,7 @@ export function extractToolsFromApi(
         operationId: originalOperationId,
         tags,
         deprecated,
+        annotations: getToolAnnotations(method, operation),
       });
     }
   }

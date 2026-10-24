@@ -36,7 +36,12 @@ import { determineBaseUrl } from './utils/url.js';
 import pkg from '../package.json' with { type: 'json' };
 
 // Export programmatic API
-export { getToolsFromOpenApi, McpToolDefinition, GetToolsOptions } from './api.js';
+export {
+  getToolsFromOpenApi,
+  McpToolDefinition,
+  McpToolAnnotations,
+  GetToolsOptions,
+} from './api.js';
 
 // Configure CLI
 const program = new Command();

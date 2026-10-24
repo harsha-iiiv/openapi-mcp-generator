@@ -65,10 +65,15 @@ export function generateToolDefinitionMap(
         console.warn(`Failed to stringify tags for tool ${tool.name}: ${e}`);
       }
 
+      // JSON string literals are safe inside the generated source.
+      const titleLine =
+        tool.title !== undefined ? `\n    title: ${JSON.stringify(tool.title)},` : '';
+      const annotationsString = JSON.stringify(tool.annotations ?? {});
+
       // Build the tool definition entry
       return `
   ["${tool.name}", {
-    name: "${tool.name}",
+    name: "${tool.name}",${titleLine}
     description: \`${escapedDescription}\`,
     inputSchema: ${schemaString},
     method: "${tool.method}",
@@ -77,7 +82,8 @@ export function generateToolDefinitionMap(
     requestBodyContentType: ${tool.requestBodyContentType ? `"${tool.requestBodyContentType}"` : 'undefined'},
     securityRequirements: ${securityReqsString},
     tags: ${tagsString},
-    deprecated: ${tool.deprecated ? 'true' : 'false'}
+    deprecated: ${tool.deprecated ? 'true' : 'false'},
+    annotations: ${annotationsString}
   }],`;
     })
     .join('');
@@ -93,8 +99,10 @@ export function generateListToolsHandler(): string {
 server.setRequestHandler('tools/list', async () => {
   const toolsForClient: Tool[] = Array.from(toolDefinitionMap.values()).map(def => ({
     name: def.name,
+    ...(def.title !== undefined && { title: def.title }),
     description: def.description,
-    inputSchema: def.inputSchema
+    inputSchema: def.inputSchema,
+    annotations: def.annotations
   }));
   return { tools: toolsForClient };
 });

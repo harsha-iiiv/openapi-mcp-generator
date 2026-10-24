@@ -171,6 +171,7 @@ type JsonObject = Record<string, any>;
  */
 interface McpToolDefinition {
     name: string;
+    title?: string;
     description: string;
     inputSchema: any;
     method: string;
@@ -180,6 +181,7 @@ interface McpToolDefinition {
     securityRequirements: any[];
     tags?: string[];
     deprecated?: boolean;
+    annotations: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
 }
 
 /**

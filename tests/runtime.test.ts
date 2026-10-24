@@ -113,6 +113,14 @@ function featureSpec(upstream: string): OpenAPIV3.Document {
           ],
           responses: { '200': { description: 'ok' } },
         },
+        delete: {
+          operationId: 'deletePet',
+          summary: '  Delete a pet  ',
+          'x-mcp-title': 'Remove pet',
+          'x-mcp-annotations': { destructiveHint: false },
+          parameters: [{ name: 'petId', in: 'path', required: true, schema: { type: 'integer' } }],
+          responses: { '204': { description: 'deleted' } },
+        } as OpenAPIV3.OperationObject,
       },
       '/pets': {
         post: {
@@ -318,6 +326,31 @@ describe('input schema fidelity seen by clients', () => {
       expect(body.properties.id, client.label).toBeUndefined();
       expect(body.required, client.label).toEqual(['name']);
       expect(body.properties.name.examples, client.label).toEqual(['Rex']);
+    }
+  });
+
+  it('lists titles and method-derived annotations, with x-mcp overrides', async () => {
+    for (const client of clients) {
+      const { tools } = await client.listTools();
+      const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+      expect(byName.getPet.title, client.label).toBe('Get a pet');
+      expect(byName.getPet.annotations, client.label).toEqual({
+        readOnlyHint: true,
+        openWorldHint: true,
+      });
+      expect(byName.createPet.annotations, client.label).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      });
+      expect(byName.deletePet.title, client.label).toBe('Remove pet');
+      expect(byName.deletePet.annotations, client.label).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      });
     }
   });
 

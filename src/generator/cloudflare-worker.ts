@@ -92,6 +92,7 @@ export function generateWorkerToolsFile(input: CloudflareWorkerGenInput): string
 
 export interface McpToolDefinition {
   name: string;
+  title?: string;
   description: string;
   inputSchema: any;
   method: string;
@@ -101,6 +102,12 @@ export interface McpToolDefinition {
   securityRequirements: any[];
   tags: string[];
   deprecated: boolean;
+  annotations: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
 }
 
 export const toolDefinitionMap: Map<string, McpToolDefinition> = new Map([
@@ -303,8 +310,10 @@ function createServer(env: Env, forwardedHeaders: Record<string, string>): Serve
   server.setRequestHandler('tools/list', async () => ({
     tools: Array.from(toolDefinitionMap.values()).map((def) => ({
       name: def.name,
+      ...(def.title !== undefined && { title: def.title }),
       description: def.description,
       inputSchema: def.inputSchema,
+      annotations: def.annotations,
     })),
   }));
   server.setRequestHandler('tools/call', async (request): Promise<CallToolResult> => {

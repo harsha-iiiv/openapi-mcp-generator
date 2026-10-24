@@ -21,6 +21,8 @@ import {
   abbreviateToolName,
   splitNameIntoWords,
   mapOpenApiSchemaToJsonSchema,
+  getToolAnnotations,
+  getToolTitle,
 } from '../src/parser/extract-tools.js';
 import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
 import {
@@ -259,6 +261,98 @@ describe('JSON Schema fidelity of input schemas', () => {
     // Without a direction nothing is dropped.
     const neutral = mapOpenApiSchemaToJsonSchema(schema) as any;
     expect(Object.keys(neutral.properties)).toEqual(['id', 'name', 'password', 'owner']);
+  });
+});
+
+// --- tool annotations and titles -----------------------------------------------
+
+describe('tool annotations and titles', () => {
+  it('derives annotations from the HTTP method', () => {
+    const readOnly = { readOnlyHint: true, openWorldHint: true };
+    for (const method of ['get', 'head', 'options']) {
+      expect(getToolAnnotations(method, {}), method).toEqual(readOnly);
+    }
+    expect(getToolAnnotations('post', {})).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+    expect(getToolAnnotations('put', {})).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+    expect(getToolAnnotations('patch', {})).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+    expect(getToolAnnotations('delete', {})).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+  });
+
+  it('lets x-mcp-annotations override individual boolean hints only', () => {
+    expect(
+      getToolAnnotations('post', {
+        'x-mcp-annotations': {
+          idempotentHint: true,
+          openWorldHint: false,
+          other: true,
+          readOnlyHint: 'yes',
+        },
+      })
+    ).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+    expect(getToolAnnotations('get', { 'x-mcp-annotations': 'nope' })).toEqual({
+      readOnlyHint: true,
+      openWorldHint: true,
+    });
+  });
+
+  it('takes the title from x-mcp-title, else the trimmed summary, else none', () => {
+    expect(getToolTitle({ 'x-mcp-title': ' Find pets ', summary: 'Summary' })).toBe('Find pets');
+    expect(getToolTitle({ summary: '  List pets\n' })).toBe('List pets');
+    expect(getToolTitle({ summary: '   ' })).toBeUndefined();
+    expect(getToolTitle({})).toBeUndefined();
+  });
+
+  it('exposes title and annotations through the programmatic API and the generated map', async () => {
+    const api = {
+      openapi: '3.0.3',
+      info: { title: 't', version: '1' },
+      paths: {
+        '/a': {
+          get: {
+            operationId: 'listA',
+            summary: 'List A',
+            responses: { '200': { description: 'ok' } },
+          },
+          put: { operationId: 'putA', responses: { '200': { description: 'ok' } } },
+        },
+      },
+    } as OpenAPIV3.Document;
+    const tools = await getToolsFromOpenApi(api);
+    expect(tools.find((t) => t.name === 'listA')).toMatchObject({
+      title: 'List A',
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    });
+    const putA = tools.find((t) => t.name === 'putA')!;
+    expect(putA.title).toBeUndefined();
+    expect(putA.annotations?.destructiveHint).toBe(true);
+    const map = generateToolDefinitionMap(tools);
+    expect(map).toContain('title: "List A",');
+    expect(map).toContain('annotations: {"readOnlyHint":true,"openWorldHint":true}');
   });
 });
 

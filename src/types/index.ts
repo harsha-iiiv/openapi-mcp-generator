@@ -87,12 +87,29 @@ export interface CliOptions {
 }
 
 /**
+ * MCP tool annotations: hints about a tool's behavior. Clients treat them as
+ * untrusted hints, never as security guarantees.
+ */
+export interface McpToolAnnotations {
+  /** The tool does not modify its environment. */
+  readOnlyHint?: boolean;
+  /** The tool may perform destructive updates (meaningful when not read-only). */
+  destructiveHint?: boolean;
+  /** Repeating the call with the same arguments has no additional effect. */
+  idempotentHint?: boolean;
+  /** The tool interacts with an open world of external entities. */
+  openWorldHint?: boolean;
+}
+
+/**
  * MCP Tool Definition describes a tool extracted from an OpenAPI spec
  * for use in Model Context Protocol server
  */
 export interface McpToolDefinition {
   /** Name of the tool, must be unique */
   name: string;
+  /** Human-readable display name (operation `x-mcp-title`, else its summary) */
+  title?: string;
   /** Human-readable description of the tool */
   description: string;
   /** JSON Schema that defines the input parameters */
@@ -115,6 +132,8 @@ export interface McpToolDefinition {
   tags?: string[];
   /** Whether the operation is marked deprecated in the OpenAPI spec */
   deprecated?: boolean;
+  /** Behavior hints derived from the HTTP method, overridable with `x-mcp-annotations` */
+  annotations?: McpToolAnnotations;
 }
 
 /**

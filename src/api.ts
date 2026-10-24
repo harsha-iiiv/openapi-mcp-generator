@@ -6,7 +6,7 @@
 import SwaggerParser from '@apidevtools/swagger-parser';
 import { OpenAPIV3 } from 'openapi-types';
 import { extractToolsFromApi } from './parser/extract-tools.js';
-import { McpToolDefinition } from './types/index.js';
+import { McpToolAnnotations, McpToolDefinition } from './types/index.js';
 import { determineBaseUrl } from './utils/url.js';
 import {
   assertNoExternalRefs,
@@ -124,4 +124,4 @@ export async function getToolsFromOpenApi(
 }
 
 // Export types for convenience
-export { McpToolDefinition };
+export { McpToolDefinition, McpToolAnnotations };
