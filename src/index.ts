@@ -7,7 +7,7 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { OpenAPIV3 } from 'openapi-types';
 
 // Import generators
@@ -30,7 +30,7 @@ import {
 } from './generator/index.js';
 
 // Import types
-import { CliOptions, TransportType } from './types/index.js';
+import { CliOptions, InboundAuthMode, TransportType } from './types/index.js';
 import { normalizeBoolean } from './utils/helpers.js';
 import { parseSpecSecurely } from './utils/parser-security.js';
 import { extractToolsFromApi } from './parser/extract-tools.js';
@@ -109,12 +109,21 @@ program
   )
   .option(
     '--header-passthrough <names>',
-    'Comma-separated inbound header names to forward to the upstream API (web/streamable-http transports).',
+    'Comma-separated inbound header names to forward to the upstream API (web, streamable-http and cloudflare-worker transports).',
     (val) =>
       val
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean)
+  )
+  .option(
+    '--inbound-auth <mode>',
+    'Inbound authentication for HTTP transports (web, streamable-http, cloudflare-worker): "none" or "bearer". With "bearer", clients must send Authorization: Bearer <token>, read at runtime from MCP_AUTH_TOKEN. Default: none.',
+    (val: string): InboundAuthMode => {
+      const mode = val.trim().toLowerCase();
+      if (mode === 'none' || mode === 'bearer') return mode;
+      throw new InvalidArgumentError('Expected "none" or "bearer".');
+    }
   )
   .option(
     '-k, --insecure',
@@ -143,6 +152,74 @@ program
 
 // Export the program object for use in bin stub
 export { program };
+
+/** HTTP transports: these expose a network endpoint that inbound auth can protect. */
+const HTTP_TRANSPORTS: ReadonlyArray<string> = ['web', 'streamable-http', 'cloudflare-worker'];
+
+/** Connection-level headers that must never be forwarded to the upstream API. */
+const NON_FORWARDABLE_HEADERS = new Set([
+  'host',
+  'connection',
+  'content-length',
+  'transfer-encoding',
+  'keep-alive',
+  'upgrade',
+  'te',
+  'trailer',
+]);
+
+/**
+ * Normalizes --header-passthrough names (lower-case, de-duplicated) and drops
+ * connection-level headers that cannot be meaningfully forwarded.
+ */
+export function normalizePassthroughHeaders(names: string[] | undefined): string[] {
+  const result: string[] = [];
+  for (const raw of Array.isArray(names) ? names : []) {
+    const name = raw.trim().toLowerCase();
+    if (!name || result.includes(name)) continue;
+    if (NON_FORWARDABLE_HEADERS.has(name)) {
+      console.error(`Warning: --header-passthrough ignores the connection-level header '${name}'.`);
+      continue;
+    }
+    result.push(name);
+  }
+  return result;
+}
+
+/**
+ * Validates the inbound-auth / header-passthrough combination and prints
+ * transport-specific guidance. Throws on a combination that would leak the
+ * inbound MCP token to the upstream API.
+ */
+export function checkInboundAuthOptions(
+  transport: string,
+  inboundAuth: InboundAuthMode,
+  passthrough: string[],
+  hasUpstreamSecurity: boolean
+): void {
+  if (inboundAuth === 'bearer' && passthrough.includes('authorization')) {
+    throw new Error(
+      '--header-passthrough authorization cannot be combined with --inbound-auth bearer: the ' +
+        'Authorization header carries the MCP access token and would be forwarded to the upstream ' +
+        'API. Forward the upstream key in another header (for example X-API-Key).'
+    );
+  }
+  const isHttp = HTTP_TRANSPORTS.includes(transport);
+  if (inboundAuth === 'bearer' && !isHttp) {
+    console.error(
+      'Note: --inbound-auth applies to HTTP transports (web, streamable-http, cloudflare-worker). ' +
+        'A stdio server has no network endpoint: only the process that launches it can talk to it, ' +
+        'so no token check is generated.'
+    );
+  }
+  if (isHttp && inboundAuth !== 'bearer' && hasUpstreamSecurity) {
+    console.error(
+      'Warning: this HTTP server will accept requests without authentication and will call the ' +
+        'upstream API with the credentials you configure. Pass --inbound-auth bearer to require a ' +
+        'token, or --header-passthrough <header> so each client sends its own upstream key.'
+    );
+  }
+}
 
 /**
  * Main function to run the generator
@@ -207,6 +284,17 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     );
     console.error('OpenAPI spec parsed successfully.');
 
+    // Inbound auth / header passthrough (issues #55, #80)
+    const transport = options.transport ?? 'stdio';
+    const inboundAuth: InboundAuthMode = options.inboundAuth ?? 'none';
+    options.headerPassthrough = normalizePassthroughHeaders(options.headerPassthrough);
+    checkInboundAuthOptions(
+      transport,
+      inboundAuth,
+      options.headerPassthrough,
+      Object.keys(api.components?.securitySchemes ?? {}).length > 0
+    );
+
     // Determine server name and version
     const serverNameRaw = options.serverName || api.info?.title || 'my-mcp-server';
     const serverName = serverNameRaw.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
@@ -218,10 +306,6 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     if (options.transport === 'cloudflare-worker') {
       // Warn about flags that do not apply to the Worker target.
       for (const [flag, present] of [
-        [
-          '--header-passthrough',
-          Array.isArray(options.headerPassthrough) && options.headerPassthrough.length > 0,
-        ],
         ['--custom-auth', Boolean(options.customAuth)],
         ['--port', options.port !== undefined],
         ['--insecure', Boolean(options.insecure)],
@@ -268,6 +352,8 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         serverVersion,
         securitySchemes: api.components?.securitySchemes,
         baseUrl: resolvedBaseUrl,
+        inboundAuth,
+        headerPassthrough: options.headerPassthrough,
       });
 
       // Each file's parent directory is created per-iteration below, so no
@@ -287,6 +373,11 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       console.error(
         `3. Set secrets: npx wrangler secret put <NAME>  (see README.md / .dev.vars.example)`
       );
+      if (inboundAuth === 'bearer') {
+        console.error(
+          `   Inbound auth is on: also run npx wrangler secret put MCP_AUTH_TOKEN (clients send Authorization: Bearer <token>)`
+        );
+      }
       console.error(`4. Deploy: npx wrangler deploy`);
       console.error('---');
       return;
@@ -318,7 +409,9 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     const jestConfigContent = generateJestConfig();
 
     console.error('Generating .env.example file...');
-    const envExampleContent = generateEnvExample(api.components?.securitySchemes);
+    const envExampleContent = generateEnvExample(api.components?.securitySchemes, {
+      inboundAuth: HTTP_TRANSPORTS.includes(transport) ? inboundAuth : 'none',
+    });
 
     console.error('Generating OAuth2 documentation...');
     const oauth2DocsContent = generateOAuth2Docs(api.components?.securitySchemes);
@@ -383,7 +476,11 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       console.error('Generating web server files...');
 
       // Generate web server code
-      const webServerCode = generateWebServerCode(options.port ?? 3000, enableHeaderPassthrough);
+      const webServerCode = generateWebServerCode(
+        options.port ?? 3000,
+        enableHeaderPassthrough,
+        inboundAuth
+      );
       await fs.writeFile(webServerPath, webServerCode);
       console.error(` -> Created ${webServerPath}`);
 
@@ -403,7 +500,8 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       // Generate StreamableHTTP server code
       const streamableHttpCode = generateStreamableHttpCode(
         options.port ?? 3000,
-        enableHeaderPassthrough
+        enableHeaderPassthrough,
+        inboundAuth
       );
       await fs.writeFile(streamableHttpPath, streamableHttpCode);
       console.error(` -> Created ${streamableHttpPath}`);
@@ -437,6 +535,11 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server: npm start`);
       console.error(`   (This runs the built JavaScript code in build/index.js)`);
+    }
+    if (inboundAuth === 'bearer' && HTTP_TRANSPORTS.includes(transport)) {
+      console.error(
+        `Inbound auth is on: set MCP_AUTH_TOKEN in .env; clients send Authorization: Bearer <token>.`
+      );
     }
     console.error('---');
   } catch (error) {

@@ -1,20 +1,50 @@
 /**
  * Generator for StreamableHTTP server code for the MCP server using Hono
  */
+import { InboundAuthMode } from '../types/index.js';
+import {
+  generateNodeInboundAuthImports,
+  generateNodeInboundAuthMiddleware,
+  generateNodeInboundAuthMounts,
+} from './inbound-auth.js';
 
 /**
  * Generates StreamableHTTP server code for the MCP server
  *
  * @param port Server port (default: 3000)
+ * @param enableHeaderPassthrough Forward configured inbound headers upstream (issue #55)
+ * @param inboundAuth Require a bearer token on /mcp (issue #80)
  * @returns Generated code for the StreamableHTTP server
  */
 export function generateStreamableHttpCode(
   port: number = 3000,
-  enableHeaderPassthrough: boolean = false
+  enableHeaderPassthrough: boolean = false,
+  inboundAuth: InboundAuthMode = 'none'
 ): string {
   const headerStoreImport = enableHeaderPassthrough
     ? `\nimport { inboundHeaderStore } from './index.js';`
     : '';
+  const contextImport = enableHeaderPassthrough ? `\nimport type { Context } from 'hono';` : '';
+  const collectHeadersFn = enableHeaderPassthrough
+    ? `
+/**
+ * Snapshot of this request's headers for header passthrough (issue #55). Stored in
+ * request-scoped AsyncLocalStorage, so concurrent requests never see each other's.
+ */
+function collectInboundHeaders(c: Context<AppEnv>): Record<string, string> {
+  const headers: Record<string, string> = {};
+  c.req.raw.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+  return headers;
+}
+`
+    : '';
+  // Wrap a transport call so executeApiTool can read this request's headers.
+  const withHeaders = (call: string) =>
+    enableHeaderPassthrough
+      ? `inboundHeaderStore.run(collectInboundHeaders(c), () => ${call})`
+      : call;
   return `
 /**
  * StreamableHTTP server setup for HTTP-based MCP communication using Hono
@@ -22,200 +52,108 @@ export function generateStreamableHttpCode(
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
-import { v4 as uuid } from 'uuid';
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { InitializeRequestSchema, JSONRPCError } from "@modelcontextprotocol/sdk/types.js";
-import { toReqRes, toFetchResponse } from 'fetch-to-node';${headerStoreImport}
+import { randomUUID } from 'node:crypto';
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";${contextImport}${headerStoreImport}${generateNodeInboundAuthImports(inboundAuth)}
 
 // Import server configuration constants
 import { SERVER_NAME, SERVER_VERSION } from './index.js';
 
-// Constants
-const SESSION_ID_HEADER_NAME = "mcp-session-id";
-const JSON_RPC = "2.0";
+/** Creates a fresh MCP server instance; one per session (SDK >= 1.26). */
+type ServerFactory = () => Server;
 
-/**
- * StreamableHTTP MCP Server handler
- */
-class MCPStreamableHttpServer {
-  server: Server;
-  // Store active transports by session ID
-  transports: {[sessionId: string]: StreamableHTTPServerTransport} = {};
-  
-  constructor(server: Server) {
-    this.server = server;
-  }
-  
-  /**
-   * Handle GET requests (typically used for static files)
-   */
-  async handleGetRequest(c: any) {
-    console.error("GET request received - StreamableHTTP transport only supports POST");
-    return c.text('Method Not Allowed', 405, {
-      'Allow': 'POST'
-    });
-  }
-  
-  /**
-   * Handle POST requests (all MCP communication)
-   */
-  async handlePostRequest(c: any) {
-    const sessionId = c.req.header(SESSION_ID_HEADER_NAME);
-    console.error(\`POST request received \${sessionId ? 'with session ID: ' + sessionId : 'without session ID'}\`);
-${
-  enableHeaderPassthrough
-    ? `
-    // Capture inbound headers into request-scoped storage so configured ones can
-    // be forwarded to the upstream API by executeApiTool (header passthrough,
-    // issue #55). AsyncLocalStorage keeps this per-request — no cross-request leak.
-    const __inbound: Record<string, string> = {};
-    try {
-      for (const [k, v] of Object.entries(c.req.header())) {
-        if (typeof v === 'string') __inbound[k.toLowerCase()] = v;
-      }
-    } catch {
-      // Non-fatal: passthrough simply won't apply if headers can't be read.
-    }
-    return inboundHeaderStore.run(__inbound, () => this._handlePostRequest(c, sessionId));
-  }
+/** Hono context variables set by middleware. */
+type AppEnv = { Variables: { inboundPrincipal?: string } };
 
-  async _handlePostRequest(c: any, sessionId: string | undefined) {`
-    : ''
+/** An open MCP session: its transport and the credential digest that opened it. */
+interface Session {
+  transport: WebStandardStreamableHTTPServerTransport;
+  principal?: string;
 }
-    try {
-      const body = await c.req.json();
-      
-      // Convert Fetch Request to Node.js req/res
-      const { req, res } = toReqRes(c.req.raw);
-      
-      // Reuse existing transport if we have a session ID
-      if (sessionId && this.transports[sessionId]) {
-        const transport = this.transports[sessionId];
-        
-        // Handle the request with the transport
-        await transport.handleRequest(req, res, body);
-        
-        // Cleanup when the response ends
-        res.on('close', () => {
-          console.error(\`Request closed for session \${sessionId}\`);
-        });
-        
-        // Convert Node.js response back to Fetch Response
-        return toFetchResponse(res);
-      }
-      
-      // Create new transport for initialize requests
-      if (!sessionId && this.isInitializeRequest(body)) {
-        console.error("Creating new StreamableHTTP transport for initialize request");
-        
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => uuid(),
-        });
-        
-        // Add error handler for debug purposes
-        transport.onerror = (err) => {
-          console.error('StreamableHTTP transport error:', err);
-        };
-        
-        // Connect the transport to the MCP server
-        await this.server.connect(transport);
-        
-        // Handle the request with the transport
-        await transport.handleRequest(req, res, body);
-        
-        // Store the transport if we have a session ID
-        const newSessionId = transport.sessionId;
-        if (newSessionId) {
-          console.error(\`New session established: \${newSessionId}\`);
-          this.transports[newSessionId] = transport;
-          
-          // Set up clean-up for when the transport is closed
-          transport.onclose = () => {
-            console.error(\`Session closed: \${newSessionId}\`);
-            delete this.transports[newSessionId];
-          };
-        }
-        
-        // Cleanup when the response ends
-        res.on('close', () => {
-          console.error(\`Request closed for new session\`);
-        });
-        
-        // Convert Node.js response back to Fetch Response
-        return toFetchResponse(res);
-      }
-      
-      // Invalid request (no session ID and not initialize)
-      return c.json(
-        this.createErrorResponse("Bad Request: invalid session ID or method."),
-        400
-      );
-    } catch (error) {
-      console.error('Error handling MCP request:', error);
-      return c.json(
-        this.createErrorResponse("Internal server error."),
-        500
-      );
-    }
-  }
-  
-  /**
-   * Create a JSON-RPC error response
-   */
-  private createErrorResponse(message: string): JSONRPCError {
-    return {
-      jsonrpc: JSON_RPC,
-      error: {
-        code: -32000,
-        message: message,
-      },
-      id: uuid(),
-    };
-  }
-  
-  /**
-   * Check if the request is an initialize request
-   */
-  private isInitializeRequest(body: any): boolean {
-    const isInitial = (data: any) => {
-      const result = InitializeRequestSchema.safeParse(data);
-      return result.success;
-    };
-    
-    if (Array.isArray(body)) {
-      return body.some(request => isInitial(request));
-    }
-    
-    return isInitial(body);
-  }
+${generateNodeInboundAuthMiddleware(inboundAuth)}${collectHeadersFn}
+/** JSON-RPC error body for transport-level failures. */
+function jsonRpcError(code: number, message: string) {
+  return { jsonrpc: '2.0' as const, error: { code, message }, id: null };
+}
+
+/** True when a request body is, or contains, an initialize request. */
+function containsInitialize(body: unknown): boolean {
+  return Array.isArray(body) ? body.some((message) => isInitializeRequest(message)) : isInitializeRequest(body);
 }
 
 /**
  * Sets up a web server for the MCP server using StreamableHTTP transport
  * 
- * @param server The MCP Server instance
+ * @param createServer Factory returning a fresh MCP server for each session
  * @param port The port to listen on (default: ${port})
  * @returns The Hono app instance
  */
-export async function setupStreamableHttpServer(server: Server, port = ${port}) {
+export async function setupStreamableHttpServer(createServer: ServerFactory, port = ${port}) {
   // Create Hono app
-  const app = new Hono();
+  const app = new Hono<AppEnv>();
   
-  // Enable CORS
-  app.use('*', cors());
-  
-  // Create MCP handler
-  const mcpHandler = new MCPStreamableHttpServer(server);
+  // Enable CORS and expose the session header to browser clients
+  app.use('*', cors({ exposeHeaders: ['mcp-session-id'] }));
+${generateNodeInboundAuthMounts(inboundAuth, ['/mcp'])}
+  // Open sessions by ID. Each session owns its own server instance, so
+  // concurrent clients never share protocol state.
+  const sessions = new Map<string, Session>();
   
   // Add a simple health check endpoint
   app.get('/health', (c) => {
     return c.json({ status: 'OK', server: SERVER_NAME, version: SERVER_VERSION });
   });
   
-  // Main MCP endpoint supporting both GET and POST
-  app.get("/mcp", (c) => mcpHandler.handleGetRequest(c));
-  app.post("/mcp", (c) => mcpHandler.handlePostRequest(c));
+  // MCP endpoint: POST carries messages, GET opens the server-to-client stream,
+  // DELETE ends the session.
+  app.all('/mcp', async (c) => {
+    const sessionId = c.req.header('mcp-session-id');
+    const principal = c.get('inboundPrincipal');
+
+    if (sessionId) {
+      const session = sessions.get(sessionId);
+      // Unknown session, or a different credential than the one that opened it:
+      // answer exactly as if the session did not exist.
+      if (!session || session.principal !== principal) {
+        return c.json(jsonRpcError(-32001, 'Session not found'), 404);
+      }
+      return ${withHeaders('session.transport.handleRequest(c.req.raw)')};
+    }
+
+    if (c.req.method !== 'POST') {
+      return c.json(jsonRpcError(-32000, 'Bad Request: missing mcp-session-id header.'), 400);
+    }
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json(jsonRpcError(-32700, 'Parse error: invalid JSON.'), 400);
+    }
+    if (!containsInitialize(body)) {
+      return c.json(jsonRpcError(-32000, 'Bad Request: no valid session ID or initialize request.'), 400);
+    }
+
+    // New session: a fresh server + transport pair, bound to the opening credential.
+    const transport: WebStandardStreamableHTTPServerTransport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (id) => {
+        console.error(\`New session established: \${id}\`);
+        sessions.set(id, { transport, principal });
+      },
+      onsessionclosed: (id) => {
+        console.error(\`Session closed: \${id}\`);
+        sessions.delete(id);
+      },
+    });
+    transport.onerror = (err) => {
+      console.error('StreamableHTTP transport error:', err);
+    };
+    const server = createServer();
+    await server.connect(transport);
+    return ${withHeaders('transport.handleRequest(c.req.raw, { parsedBody: body })')};
+  });
   
   // Static files for the web client (if any)
   app.get('/*', async (c) => {

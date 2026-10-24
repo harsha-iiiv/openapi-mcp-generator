@@ -106,7 +106,7 @@ main().catch((error) => {
       transportImport = `\nimport { setupWebServer } from "./web-server.js";`;
       transportCode = `// Set up Web Server transport
   try {
-    await setupWebServer(server, ${portExpr});
+    await setupWebServer(createServer, ${portExpr});
   } catch (error) {
     console.error("Error setting up web server:", error);
     process.exit(1);
@@ -116,7 +116,7 @@ main().catch((error) => {
       transportImport = `\nimport { setupStreamableHttpServer } from "./streamable-http.js";`;
       transportCode = `// Set up StreamableHTTP transport
   try {
-    await setupStreamableHttpServer(server, ${portExpr});
+    await setupStreamableHttpServer(createServer, ${portExpr});
   } catch (error) {
     console.error("Error setting up StreamableHTTP server:", error);
     process.exit(1);
@@ -126,6 +126,7 @@ main().catch((error) => {
       transportImport = '';
       transportCode = `// Set up stdio transport
   try {
+    const server = createServer();
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error(\`\${SERVER_NAME} MCP Server (v\${SERVER_VERSION}) running on stdio\${API_BASE_URL ? \`, proxying API at \${API_BASE_URL}\` : ''}\`);
@@ -192,14 +193,6 @@ export const API_BASE_URL = process.env.API_BASE_URL || "${determinedBaseUrl || 
 console.error("API_BASE_URL is set to:", API_BASE_URL);
 
 /**
- * MCP Server instance
- */
-const server = new Server(
-    { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {} } }
-);
-
-/**
  * Map of tool definitions by name
  */
 const toolDefinitionMap: Map<string, McpToolDefinition> = new Map([
@@ -211,8 +204,20 @@ ${toolDefinitionMapCode}
  */
 const securitySchemes = ${JSON.stringify(api.components?.securitySchemes || {}, null, 2).replace(/^/gm, '  ')};
 
+/**
+ * Creates a fresh MCP server instance with the tool handlers registered.
+ * HTTP transports call this once per session or connection, because an SDK
+ * server instance can only be connected to one transport at a time (SDK >= 1.26).
+ */
+export function createServer(): Server {
+  const server = new Server(
+      { name: SERVER_NAME, version: SERVER_VERSION },
+      { capabilities: { tools: {} } }
+  );
 ${listToolsHandlerCode}
 ${callToolHandlerCode}
+  return server;
+}
 ${executeApiToolFunctionCode}
 
 /**

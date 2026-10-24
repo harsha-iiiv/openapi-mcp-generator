@@ -31,7 +31,8 @@ export function generatePackageJson(
       node: '>=20.0.0',
     },
     dependencies: {
-      '@modelcontextprotocol/sdk': '^1.10.0',
+      // >= 1.26: web-standard Streamable HTTP transport; one server instance per transport.
+      '@modelcontextprotocol/sdk': '^1.26.0',
       axios: '^1.9.0',
       dotenv: '^16.4.5',
       zod: '^3.24.3',
@@ -63,7 +64,6 @@ export function generatePackageJson(
       packageData.scripts['start:web'] = 'node build/index.js --transport=web';
     } else if (transportType === 'streamable-http') {
       packageData.scripts['start:http'] = 'node build/index.js --transport=streamable-http';
-      packageData.dependencies['fetch-to-node'] = '^2.1.0';
     }
   }
 

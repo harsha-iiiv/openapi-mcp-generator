@@ -350,10 +350,10 @@ describe('#56 OAuth env var resolves from runtime scheme name', () => {
 // --- #66: basic auth empty password -----------------------------------------
 
 describe('#66 basic auth with empty password', () => {
-  it('requires only a username (username != null) and defaults password', () => {
+  it('requires only a username (username == null rejects) and defaults password', () => {
     const code = generateExecuteApiToolFunction();
-    expect(code).toContain('username != null');
-    expect(code).toContain("password ?? ''");
+    expect(code).toContain('if (username == null) return null;');
+    expect(code).toContain("getSchemeEnv('BASIC_PASSWORD', schemeName) ?? ''");
     expect(code).not.toContain('if (username && password)');
   });
 
@@ -466,7 +466,7 @@ describe('#50 PORT env fallback and library mode', () => {
       's',
       '1'
     );
-    expect(code).toContain('setupWebServer(server, 8080)');
+    expect(code).toContain('setupWebServer(createServer, 8080)');
   });
 
   it('exports main and omits auto-invoke in lib mode', () => {
@@ -528,6 +528,7 @@ describe('cloudflare-worker target', () => {
         'package.json',
         'src/index.ts',
         'src/tools.ts',
+        'src/upstream-auth.ts',
         'tsconfig.json',
         'wrangler.jsonc',
       ].sort()
@@ -562,8 +563,8 @@ describe('cloudflare-worker target', () => {
     });
     // Embedded metadata is normalized to lowercase so the runtime `=== 'basic'`
     // check matches and the username/password env vars (not a bearer token) are used.
-    const index = fileContent(files, 'src/index.ts');
-    expect(index).toContain('"scheme": "basic"');
+    const auth = fileContent(files, 'src/upstream-auth.ts');
+    expect(auth).toContain('"scheme": "basic"');
     const devVars = fileContent(files, '.dev.vars.example');
     expect(devVars).toContain('BASICAUTH_USERNAME');
     expect(devVars).toContain('BASICAUTH_PASSWORD');
@@ -658,12 +659,16 @@ describe('cloudflare-worker target', () => {
       } as OpenAPIV3.ComponentsObject['securitySchemes'],
       baseUrl: 'https://petstore.example.com',
     });
-    const index = fileContent(files, 'src/index.ts');
+    const auth = fileContent(files, 'src/upstream-auth.ts');
 
-    expect(index).toContain('SECURITY_SCHEMES');
-    expect(index).toContain('"in": "query"');
-    expect(index).toContain('"name": "api_key"');
-    expect(index).toContain('url.searchParams.set');
+    expect(auth).toContain('SECURITY_SCHEMES');
+    expect(auth).toContain('"in": "query"');
+    expect(auth).toContain('"name": "api_key"');
+    expect(auth).toContain('url.searchParams.set');
+    // index.ts delegates to the auth module instead of embedding scheme metadata.
+    expect(fileContent(files, 'src/index.ts')).toContain(
+      "import { applyAuth } from './upstream-auth.js'"
+    );
   });
 
   it('emits an oauth2 client-credentials token fetch (with scope forwarding) and dev vars', async () => {
@@ -680,13 +685,13 @@ describe('cloudflare-worker target', () => {
       } as OpenAPIV3.ComponentsObject['securitySchemes'],
       baseUrl: 'https://petstore.example.com',
     });
-    const index = fileContent(files, 'src/index.ts');
+    const auth = fileContent(files, 'src/upstream-auth.ts');
 
     // Token request is built with URLSearchParams (grant_type + optional scope).
-    expect(index).toContain("grant_type: 'client_credentials'");
-    expect(index).toContain('tokenUrl');
+    expect(auth).toContain("grant_type: 'client_credentials'");
+    expect(auth).toContain('tokenUrl');
     // Scopes from the operation's securityRequirements are forwarded.
-    expect(index).toContain("tokenBody.set('scope'");
+    expect(auth).toContain("body.set('scope', scope)");
 
     const devVars = fileContent(files, '.dev.vars.example');
     expect(devVars).toContain('OAUTH_CLIENT_ID');
@@ -720,13 +725,13 @@ describe('cloudflare-worker target', () => {
       } as OpenAPIV3.ComponentsObject['securitySchemes'],
       baseUrl: 'https://petstore.example.com',
     });
-    const index = fileContent(files, 'src/index.ts');
+    const auth = fileContent(files, 'src/upstream-auth.ts');
     // The scheme metadata is embedded; the env-var name is derived at runtime
     // from the scheme name (`${upper}_TOKEN`), not baked into the source.
-    expect(index).toContain('"type": "http"');
-    expect(index).toContain('"scheme": "bearer"');
-    expect(index).toContain('${upper}_TOKEN');
-    expect(index).toContain('Bearer ${token}');
+    expect(auth).toContain('"type": "http"');
+    expect(auth).toContain('"scheme": "bearer"');
+    expect(auth).toContain('${upper}_TOKEN');
+    expect(auth).toContain('Bearer ${token}');
 
     // The concrete secret name is what the user must set, documented in dev vars.
     const devVars = fileContent(files, '.dev.vars.example');
@@ -743,12 +748,12 @@ describe('cloudflare-worker target', () => {
       } as OpenAPIV3.ComponentsObject['securitySchemes'],
       baseUrl: 'https://petstore.example.com',
     });
-    const index = fileContent(files, 'src/index.ts');
-    expect(index).toContain('"in": "cookie"');
-    expect(index).toContain('"name": "session"');
-    expect(index).toContain("headers['cookie']");
+    const auth = fileContent(files, 'src/upstream-auth.ts');
+    expect(auth).toContain('"in": "cookie"');
+    expect(auth).toContain('"name": "session"');
+    expect(auth).toContain("headers['cookie']");
     // Cookie value is URL-encoded to stay RFC 6265 safe.
-    expect(index).toContain('encodeURIComponent(key)');
+    expect(auth).toContain('encodeURIComponent(key)');
   });
 
   it('guards against a non-absolute base URL at runtime with an actionable error', async () => {
