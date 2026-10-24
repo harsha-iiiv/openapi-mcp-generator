@@ -113,8 +113,9 @@ The generated project includes:
 ├── src/
 │   ├── index.ts
 │   └── [transport-specific-files]
-└── public/          # For web-based transports
-    └── index.html   # Test client
+└── public/          # web and streamable-http: the browser playground
+    ├── index.html, playground.js, playground.css, mcp-client.js
+    └── playground.config.json
 ```
 
 Core dependencies:
@@ -139,7 +140,7 @@ Launches a fully functional HTTP server with:
 
 - Server-Sent Events (SSE) for bidirectional messaging
 - REST endpoint for client → server communication
-- In-browser test client UI
+- Browser playground at `/`
 - Multi-connection support
 - Built with lightweight Hono framework
 
@@ -152,7 +153,7 @@ Implements the MCP StreamableHTTP transport which offers:
 - Proper HTTP response status codes
 - Built-in error handling
 - Compatibility with MCP StreamableHTTPClientTransport
-- In-browser test client UI
+- Browser playground at `/`
 - Built with lightweight Hono framework
 
 ### Cloudflare Worker
@@ -192,7 +193,7 @@ Local development: `cp .dev.vars.example .dev.vars`, fill in secrets, then `npm 
 | Load balancing     | No                  | Limited           | Yes                | Yes (edge)              |
 | Status codes       | No                  | Limited           | Full HTTP codes    | Full HTTP codes         |
 | Headers            | No                  | Limited           | Full HTTP headers  | Full HTTP headers       |
-| Test client        | No                  | Yes               | Yes                | No (use MCP Inspector)  |
+| Browser playground | No                  | Yes               | Yes                | Yes                     |
 | Hosting            | Local               | Self-hosted       | Self-hosted        | Cloudflare (serverless) |
 
 ---
@@ -312,13 +313,24 @@ npm run start:web
 npm run start:http
 ```
 
-### Testing Web-Based Servers
+### 🧪 Browser playground
 
-For web and StreamableHTTP transports, a browser-based test client is automatically generated:
+Servers generated for `web`, `streamable-http` and `cloudflare-worker` serve a playground at `/`
+(`http://localhost:<port>/`, or `http://localhost:8787/` with `npm run dev` for a Worker). It lists
+the tools, builds a form for each one from its input schema, runs it and shows every JSON-RPC
+message, with copy-as-curl and ready-made configs for Claude Code, Cursor and VS Code. If the server
+was generated with `--inbound-auth bearer`, paste the value of `MCP_AUTH_TOKEN`; it stays in the
+browser tab.
 
-1. Start the server using the appropriate command
-2. Open your browser to `http://localhost:<port>`
-3. Use the test client to interact with your MCP server
+- The page is served from the server's own origin with a strict Content-Security-Policy, so local
+  testing needs no CORS or `MCP_ALLOWED_ORIGINS` changes. Server output is always rendered as text.
+- The same open-source page is hosted at [mcp.pidata.tech/playground](https://mcp.pidata.tech/playground)
+  for deployed servers. Generated Workers answer CORS so it (and other browser clients) can reach
+  them; for Node servers, add the page's origin to `MCP_ALLOWED_ORIGINS`.
+- Set `MCP_PLAYGROUND=off` (Node) or the `MCP_PLAYGROUND` var to `"off"` (Worker) to stop serving it,
+  for example in production.
+- stdio servers have no HTTP endpoint; test them with the
+  [MCP Inspector](https://github.com/modelcontextprotocol/inspector).
 
 ---
 
