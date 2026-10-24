@@ -18,8 +18,9 @@ function scopesList(flow: OAuthFlowWithScopes | undefined): string {
  * Generates documentation about OAuth2 configuration.
  *
  * It mirrors what generated servers do at runtime: `OAUTH_TOKEN_<SCHEME>` works for
- * every flow, and only schemes with a client credentials flow can fetch a
- * token themselves from `OAUTH_CLIENT_ID_<SCHEME>` and `OAUTH_CLIENT_SECRET_<SCHEME>`.
+ * every flow. Schemes with a client credentials flow fetch a token themselves from
+ * `OAUTH_CLIENT_ID_<SCHEME>` and `OAUTH_CLIENT_SECRET_<SCHEME>`; schemes with only a
+ * password flow fetch one from `OAUTH_USERNAME_<SCHEME>` and `OAUTH_PASSWORD_<SCHEME>`.
  *
  * @param securitySchemes Security schemes from OpenAPI spec
  * @returns Markdown documentation about OAuth2 configuration
@@ -44,11 +45,16 @@ export function generateOAuth2Docs(
     return '# OAuth2 Configuration\n\nNo OAuth2 security schemes defined in this API.';
   }
 
-  const canFetchToken = (scheme: OpenAPIV3.OAuth2SecurityScheme) =>
-    // The token request uses the client credentials grant, so a password-only scheme cannot
-    // fetch a token yet; document a pre-acquired token for it instead.
+  // The client credentials grant wins; the password grant is used only without it.
+  const usesClientCredentials = (scheme: OpenAPIV3.OAuth2SecurityScheme) =>
     Boolean(scheme.flows?.clientCredentials);
+  const usesPasswordGrant = (scheme: OpenAPIV3.OAuth2SecurityScheme) =>
+    !scheme.flows?.clientCredentials && Boolean(scheme.flows?.password);
+  const canFetchToken = (scheme: OpenAPIV3.OAuth2SecurityScheme) =>
+    usesClientCredentials(scheme) || usesPasswordGrant(scheme);
   const anyFetches = oauth2Schemes.some(({ scheme }) => canFetchToken(scheme));
+  const anyClientCredentials = oauth2Schemes.some(({ scheme }) => usesClientCredentials(scheme));
+  const anyPassword = oauth2Schemes.some(({ scheme }) => usesPasswordGrant(scheme));
 
   let content = `# OAuth2 Configuration
 
@@ -56,8 +62,12 @@ This API uses OAuth2 for authentication. The MCP server can authenticate in the 
 
 1. **Using a pre-acquired token**: set \`OAUTH_TOKEN_<SCHEME>\` to a token you already obtained. This works for every flow.
 `;
-  if (anyFetches) {
-    content += `2. **Fetching a token itself**: for schemes with a client credentials flow, the server requests a token with your client ID and secret.
+  if (anyClientCredentials) {
+    content += `2. **Fetching a token with client credentials**: for schemes with a client credentials flow, the server requests a token with your client ID and secret.
+`;
+  }
+  if (anyPassword) {
+    content += `${anyClientCredentials ? '3' : '2'}. **Fetching a token with a username and password**: for schemes with only a password flow, the server requests a token with the resource owner's username and password (resource owner password grant).
 `;
   }
   content += `
@@ -73,10 +83,16 @@ This API uses OAuth2 for authentication. The MCP server can authenticate in the 
     }
 
     const envVarPrefix = name.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
-    const fetches = canFetchToken(scheme);
 
     content += '**Configuration Variables:**\n\n';
-    if (fetches) {
+    if (usesPasswordGrant(scheme)) {
+      content += `- \`OAUTH_TOKEN_${envVarPrefix}\`: Pre-acquired OAuth token (optional when the username and password are set)\n`;
+      content += `- \`OAUTH_USERNAME_${envVarPrefix}\`: Resource owner username for the password grant\n`;
+      content += `- \`OAUTH_PASSWORD_${envVarPrefix}\`: Resource owner password for the password grant\n`;
+      content += `- \`OAUTH_CLIENT_ID_${envVarPrefix}\`: OAuth client ID, if the token endpoint requires one (optional)\n`;
+      content += `- \`OAUTH_CLIENT_SECRET_${envVarPrefix}\`: OAuth client secret for a confidential client (optional; leave unset for a public client)\n`;
+      content += `- \`OAUTH_SCOPES_${envVarPrefix}\`: Space-separated list of scopes to request (optional)\n`;
+    } else if (usesClientCredentials(scheme)) {
       content += `- \`OAUTH_TOKEN_${envVarPrefix}\`: Pre-acquired OAuth token (optional when the client ID and secret are set)\n`;
       content += `- \`OAUTH_CLIENT_ID_${envVarPrefix}\`: Your OAuth client ID\n`;
       content += `- \`OAUTH_CLIENT_SECRET_${envVarPrefix}\`: Your OAuth client secret\n`;
@@ -121,7 +137,7 @@ This API uses OAuth2 for authentication. The MCP server can authenticate in the 
   if (anyFetches) {
     content += `## Token Caching
 
-The MCP server caches tokens it fetches with a client ID and secret. Tokens are cached for their lifetime (as specified by the \`expires_in\` parameter in the token response) minus 60 seconds as a safety margin.
+The MCP server caches the tokens it fetches. Tokens are cached for their lifetime (as specified by the \`expires_in\` parameter in the token response) minus 60 seconds as a safety margin.
 
 When making API requests, the server will:
 

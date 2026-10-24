@@ -20,6 +20,18 @@ export type TransportType = 'stdio' | 'web' | 'streamable-http' | 'cloudflare-wo
 export type InboundAuthMode = 'none' | 'bearer';
 
 /**
+ * How a generated server sends one OpenAPI parameter. `style` and `explode` are
+ * set only for query and cookie parameters whose serialization differs from the
+ * OpenAPI default (style form, explode true).
+ */
+export interface ExecutionParameter {
+  name: string;
+  in: string;
+  style?: string;
+  explode?: boolean;
+}
+
+/**
  * CLI options for the generator
  */
 export interface CliOptions {
@@ -133,8 +145,12 @@ export interface McpToolDefinition {
   pathTemplate: string;
   /** OpenAPI parameter objects for this operation */
   parameters: OpenAPIV3.ParameterObject[];
-  /** Parameter names and locations for execution */
-  executionParameters: { name: string; in: string }[];
+  /**
+   * Parameter names and locations for execution. Query and cookie parameters carry
+   * `style` and `explode` only when they differ from the OpenAPI defaults
+   * (style form, explode true).
+   */
+  executionParameters: ExecutionParameter[];
   /** Content type for request body, if applicable */
   requestBodyContentType?: string;
   /**
@@ -142,6 +158,13 @@ export interface McpToolDefinition {
    * Absolute URLs replace the base URL; relative ones resolve against it.
    */
   serverUrl?: string;
+  /**
+   * Base URL for the API: `GetToolsOptions.baseUrl`, else the spec's first root server
+   * (variables resolved), else an empty string. Set on every tool returned by
+   * `getToolsFromOpenApi`. An operation or path-item server is reported in `serverUrl`
+   * and takes precedence over this value when calling the API.
+   */
+  baseUrl?: string;
   /** Security requirements for this operation */
   securityRequirements: OpenAPIV3.SecurityRequirementObject[];
   /** Original operation ID from the OpenAPI spec */

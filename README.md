@@ -5,9 +5,18 @@
 [![GitHub repository](https://img.shields.io/badge/GitHub-harsha--iiiv/openapi--mcp--generator-blue.svg)](https://github.com/harsha-iiiv/openapi-mcp-generator)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/harsha-iiiv/openapi-mcp-generator)
 
-Generate [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers from OpenAPI specifications.
+**openapi-mcp-generator is a free, MIT-licensed CLI and library that turns an OpenAPI 3.x
+specification into a ready-to-run [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
+server for stdio, SSE, Streamable HTTP or Cloudflare Workers.** You own the generated TypeScript
+code, and tool inputs are validated against JSON Schema before any request reaches your API.
 
-This CLI tool automates the generation of MCP-compatible servers that proxy requests to existing REST APIs—enabling AI agents and other MCP clients to seamlessly interact with your APIs using your choice of transport methods.
+**[Docs](https://mcp.pidata.tech/docs)** · **[Quickstart](https://mcp.pidata.tech/docs/quickstart)** ·
+**[Browser playground](https://mcp.pidata.tech/playground/)** ·
+[Changelog](https://mcp.pidata.tech/docs/changelog)
+
+```bash
+npx openapi-mcp-generator --input ./openapi.json --output ./my-mcp
+```
 
 ---
 
@@ -19,7 +28,7 @@ This CLI tool automates the generation of MCP-compatible servers that proxy requ
 - 🧪 **JSON Schema Validation**: Arguments are validated against each tool's JSON Schema 2020-12 input schema (no code generation, no `eval`).
 - 🏷️ **Annotations and Structured Output**: Tools carry titles and read-only/destructive/idempotent hints, and JSON object responses come back as `structuredContent` (optionally with a declared `outputSchema`).
 - ⚙️ **Typed Server**: Fully typed, maintainable TypeScript code output.
-- 🔌 **Multiple Transports**: Communicate over stdio, SSE via Hono, or StreamableHTTP.
+- 🔌 **Multiple Transports**: Communicate over stdio, SSE via Hono, StreamableHTTP, or a deployable Cloudflare Worker.
 - 🧰 **Project Scaffold**: Generates a complete Node.js project with `tsconfig.json`, `package.json`, and entry point.
 - 🧪 **Built-in HTML Test Clients**: Test API interactions visually in your browser (for web-based transports).
 
@@ -179,6 +188,7 @@ interface McpToolDefinition {
   executionParameters: { name: string; in: string }[];
   requestBodyContentType?: string;
   serverUrl?: string; // operation or path-item server, variables resolved
+  baseUrl?: string; // set by getToolsFromOpenApi: the baseUrl option or root server, else ''
   securityRequirements: OpenAPIV3.SecurityRequirementObject[];
   operationId: string;
   tags?: string[];
@@ -191,9 +201,9 @@ interface McpToolDefinition {
 `inputSchema` keeps `integer` types, turns `example` into `examples` and leaves out `readOnly`
 properties. Annotations come from the HTTP method (GET and HEAD are read-only, DELETE is
 destructive, PUT and DELETE are idempotent) and can be overridden per operation with
-`x-mcp-annotations`. At runtime, each returned tool also carries `baseUrl`, the resolved base URL or an
-empty string. `McpToolDefinition` does not declare it yet, so TypeScript code needs a cast to
-read it.
+`x-mcp-annotations`. Each tool returned by `getToolsFromOpenApi` carries `baseUrl`: the `baseUrl`
+option, else the spec's root server, else an empty string. An operation or path-item server is in
+`serverUrl` and takes precedence when calling the API.
 
 More filters:
 
@@ -306,7 +316,7 @@ Highlights:
 - `--inbound-auth bearer` protects `/mcp` with a token from `wrangler secret put MCP_AUTH_TOKEN`; `--header-passthrough` forwards per-user upstream keys from the client.
 - `--custom-auth`, `--port`, `--insecure`, `--generate-lib`, and `--oauth-creds-in-body` do not apply to this target and are ignored with a warning.
 
-Local development: `cp .dev.vars.example .dev.vars`, fill in secrets, then `npm run dev` (serves `http://localhost:8787/mcp`). Connect with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or, from Claude Desktop, via [mcp-remote](https://www.npmjs.com/package/mcp-remote).
+Local development: `cp .dev.vars.example .dev.vars`, uncomment and fill in the secrets you use, then `npm run dev` (serves `http://localhost:8787/mcp`). Connect with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or, from Claude Desktop, via [mcp-remote](https://www.npmjs.com/package/mcp-remote).
 
 ### Transport Comparison
 
@@ -330,13 +340,19 @@ Local development: `cp .dev.vars.example .dev.vars`, fill in secrets, then `npm 
 
 Configure auth credentials in your environment:
 
-| Auth Type  | Variable Format                                                                                    |
-| ---------- | -------------------------------------------------------------------------------------------------- |
-| API Key    | `API_KEY_<SCHEME_NAME>`                                                                            |
-| Bearer     | `BEARER_TOKEN_<SCHEME_NAME>`                                                                       |
-| Basic Auth | `BASIC_USERNAME_<SCHEME_NAME>`, `BASIC_PASSWORD_<SCHEME_NAME>`                                     |
-| OAuth2     | `OAUTH_CLIENT_ID_<SCHEME_NAME>`, `OAUTH_CLIENT_SECRET_<SCHEME_NAME>`, `OAUTH_SCOPES_<SCHEME_NAME>` |
-| OpenID     | `OPENID_TOKEN_<SCHEME_NAME>`                                                                       |
+| Auth Type  | Variable Format                                                                                                                    |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| API Key    | `API_KEY_<SCHEME_NAME>`                                                                                                            |
+| Bearer     | `BEARER_TOKEN_<SCHEME_NAME>`                                                                                                       |
+| Basic Auth | `BASIC_USERNAME_<SCHEME_NAME>`, `BASIC_PASSWORD_<SCHEME_NAME>`                                                                     |
+| OAuth2     | `OAUTH_TOKEN_<SCHEME_NAME>`, or `OAUTH_CLIENT_ID_<SCHEME_NAME>`, `OAUTH_CLIENT_SECRET_<SCHEME_NAME>`, `OAUTH_SCOPES_<SCHEME_NAME>` |
+| OpenID     | `OPENID_TOKEN_<SCHEME_NAME>`                                                                                                       |
+
+For OAuth2, `OAUTH_TOKEN_<SCHEME_NAME>` is a token you already have and works for every flow.
+Otherwise the server fetches a token: with the client ID and secret when the scheme has a client
+credentials flow or, when it has only a password flow, with `OAUTH_USERNAME_<SCHEME_NAME>` and
+`OAUTH_PASSWORD_<SCHEME_NAME>` (plus the client ID, and the secret for a confidential client, when
+the token endpoint needs them).
 
 When an operation lists several security requirements, the first one whose schemes are all
 configured is used. If none can be satisfied (a forwarded `--header-passthrough` header counts)
@@ -348,7 +364,9 @@ credentials instead. OAuth2 tokens are requested with the operation's scopes unl
 `OAUTH_SCOPES_<SCHEME_NAME>` overrides them. The Cloudflare Worker target reads the same
 credentials from Wrangler secrets named `<SCHEME_NAME>_API_KEY`, `<SCHEME_NAME>_TOKEN`,
 `<SCHEME_NAME>_USERNAME`/`_PASSWORD` and `<SCHEME_NAME>_CLIENT_ID`/`_CLIENT_SECRET` (see the
-generated `.dev.vars.example`).
+generated `.dev.vars.example`). For OAuth2, `<SCHEME_NAME>_TOKEN` holds a token you already have
+and works for every flow; the Worker fetches a token from the client ID and secret only when the
+scheme declares a client credentials flow.
 
 ---
 
