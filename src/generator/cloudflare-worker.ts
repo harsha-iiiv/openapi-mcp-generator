@@ -11,7 +11,11 @@
  */
 import { OpenAPIV3 } from 'openapi-types';
 import { InboundAuthMode, McpToolDefinition } from '../types/index.js';
-import { generateSchemaValidationCode, generateToolDefinitionMap } from '../utils/code-gen.js';
+import {
+  generateSchemaValidationCode,
+  generateServerUrlResolutionCode,
+  generateToolDefinitionMap,
+} from '../utils/code-gen.js';
 import { generateWorkerPlaygroundModule } from './playground.js';
 
 /** A single generated file, relative to the output project root. */
@@ -99,6 +103,7 @@ export interface McpToolDefinition {
   pathTemplate: string;
   executionParameters: { name: string; in: string }[];
   requestBodyContentType?: string;
+  serverUrl?: string;
   securityRequirements: any[];
   tags: string[];
   deprecated: boolean;
@@ -332,7 +337,7 @@ function createServer(env: Env, forwardedHeaders: Record<string, string>): Serve
   });
   return server;
 }
-${generateSchemaValidationCode()}${inboundAuthDecl}
+${generateSchemaValidationCode()}${generateServerUrlResolutionCode()}${inboundAuthDecl}
 /**
  * CORS for browser clients, including the hosted playground. Any origin may call
  * /mcp because access is controlled by the Authorization header, never by cookies.
@@ -391,7 +396,11 @@ async function executeApiTool(
   forwardedHeaders: Record<string, string>
 ): Promise<{ content: { type: 'text'; text: string }[]; isError?: boolean }> {
   try {
-    const baseUrl = (env.API_BASE_URL || DEFAULT_BASE_URL || '').replace(/\\/+$/, '');
+    // Operation and path-item servers win over the configured base URL.
+    const baseUrl = resolveOperationBaseUrl(
+      def.serverUrl,
+      (env.API_BASE_URL || DEFAULT_BASE_URL || '').replace(/\\/+$/, '')
+    );
     // Substitute path params.
     let pathName = def.pathTemplate;
     const queryParams = new URLSearchParams();

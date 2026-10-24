@@ -501,3 +501,68 @@ describe('lean generated Node projects', () => {
     expect(index).not.toMatch(/from ['"]dotenv['"]/);
   });
 });
+
+// --- per-operation and per-path servers (#73) -------------------------------------
+
+describe('per-operation and per-path servers (#73)', () => {
+  let clients: AnyClient[] = [];
+
+  const serversSpec = (): OpenAPIV3.Document =>
+    ({
+      openapi: '3.0.3',
+      info: { title: 'Servers Matrix', version: '1.0.0' },
+      servers: [{ url: `${upstream.url}/root` }],
+      paths: {
+        '/default': {
+          get: { operationId: 'useRoot', responses: { '200': { description: 'ok' } } },
+        },
+        '/rooted': {
+          servers: [{ url: '/other' }],
+          get: { operationId: 'useRootedServer', responses: { '200': { description: 'ok' } } },
+        },
+        '/relative': {
+          servers: [{ url: 'path-level' }],
+          get: { operationId: 'usePathServer', responses: { '200': { description: 'ok' } } },
+          post: {
+            operationId: 'useOperationServer',
+            servers: [
+              {
+                url: `${upstream.url}/{area}/v{version}`,
+                variables: {
+                  area: { default: 'abs' },
+                  version: { default: '9', enum: ['8', '9'] },
+                },
+              },
+            ],
+            responses: { '200': { description: 'ok' } },
+          },
+        },
+      },
+    }) as OpenAPIV3.Document;
+
+  beforeAll(async () => {
+    // API_BASE_URL overrides the root server; relative servers resolve against it,
+    // absolute operation servers ignore it.
+    clients = await connectAll(workdir, 'servers', serversSpec(), {
+      env: { API_BASE_URL: `${upstream.url}/env` },
+    });
+  }, 120_000);
+
+  afterAll(async () => {
+    for (const client of clients) await client.close();
+  });
+
+  it('routes each operation to its operation, path-item or base server', async () => {
+    for (const client of clients) {
+      await client.callTool('useRoot', {});
+      expect(upstream.requests.at(-1)?.path, client.label).toBe('/env/default');
+      await client.callTool('useRootedServer', {});
+      expect(upstream.requests.at(-1)?.path, client.label).toBe('/other/rooted');
+      await client.callTool('usePathServer', {});
+      expect(upstream.requests.at(-1)?.path, client.label).toBe('/env/path-level/relative');
+      const result = await client.callTool('useOperationServer', {});
+      expect(result.isError ?? false, client.label).toBe(false);
+      expect(upstream.requests.at(-1)?.path, client.label).toBe('/abs/v9/relative');
+    }
+  });
+});

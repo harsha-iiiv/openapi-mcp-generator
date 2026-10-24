@@ -264,6 +264,41 @@ describe('JSON Schema fidelity of input schemas', () => {
   });
 });
 
+// --- per-operation servers (#73) -------------------------------------------------
+
+describe('#73 operation and path-item servers', () => {
+  const api = {
+    openapi: '3.0.3',
+    info: { title: 't', version: '1' },
+    servers: [{ url: 'https://{env}.example.com/api/', variables: { env: { default: 'prod' } } }],
+    paths: {
+      '/a': {
+        servers: [{ url: 'https://path.example.com' }, { url: 'https://ignored.example.com' }],
+        get: { operationId: 'pathLevel', responses: { '200': { description: 'ok' } } },
+        post: {
+          operationId: 'operationLevel',
+          servers: [
+            { url: '/v{major}/', variables: { major: { default: '2' } } },
+            { url: 'https://ignored.example.com' },
+          ],
+          responses: { '200': { description: 'ok' } },
+        },
+      },
+      '/b': { get: { operationId: 'rootLevel', responses: { '200': { description: 'ok' } } } },
+    },
+  } as unknown as OpenAPIV3.Document;
+
+  it('records operation > path-item servers with variables resolved; root stays the base URL', async () => {
+    const tools = await getToolsFromOpenApi(api);
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.operationLevel.serverUrl).toBe('/v2');
+    expect(byName.pathLevel.serverUrl).toBe('https://path.example.com');
+    expect(byName.rootLevel.serverUrl).toBeUndefined();
+    expect((byName.rootLevel as any).baseUrl).toBe('https://prod.example.com/api');
+    expect(generateToolDefinitionMap(tools)).toContain('serverUrl: "/v2",');
+  });
+});
+
 // --- tool annotations and titles -----------------------------------------------
 
 describe('tool annotations and titles', () => {

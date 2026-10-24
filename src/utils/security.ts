@@ -740,8 +740,9 @@ async function executeApiTool(
         throw new Error(\`Failed to resolve path parameters: \${urlPath}\`);
     }
     
-    // Construct the full URL
-    const requestUrl = API_BASE_URL ? \`\${API_BASE_URL}\${urlPath}\` : urlPath;
+    // Construct the full URL (operation and path-item servers win over the base URL)
+    const baseUrl = resolveOperationBaseUrl(definition.serverUrl, API_BASE_URL);
+    const requestUrl = baseUrl ? \`\${baseUrl}\${urlPath}\` : urlPath;
 
     // Handle request body if needed
     if (definition.requestBodyContentType && typeof validatedArgs['requestBody'] !== 'undefined') {

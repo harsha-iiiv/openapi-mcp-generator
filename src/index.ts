@@ -332,13 +332,15 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       // - A relative base URL (e.g. the spec's server is "/api/v3"): still
       //   deployable once the user sets an absolute API_BASE_URL, so warn but
       //   proceed (and the generated Worker guards it at runtime too).
-      if (!resolvedBaseUrl) {
+      const everyToolHasAbsoluteServer =
+        tools.length > 0 && tools.every((t) => /^https?:\/\//i.test(t.serverUrl ?? ''));
+      if (!resolvedBaseUrl && !everyToolHasAbsoluteServer) {
         throw new Error(
           'Unable to determine an API base URL for --transport cloudflare-worker. ' +
             'The spec has no usable `servers` entry — pass --base-url https://host/path.'
         );
       }
-      if (!/^https?:\/\//i.test(resolvedBaseUrl)) {
+      if (resolvedBaseUrl && !/^https?:\/\//i.test(resolvedBaseUrl)) {
         console.error(
           `Warning: the resolved API base URL "${resolvedBaseUrl}" is not absolute. ` +
             `The generated Worker needs an absolute upstream URL — pass --base-url ` +

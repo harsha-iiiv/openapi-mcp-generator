@@ -18,7 +18,7 @@ export function determineBaseUrl(api: OpenAPIV3.Document, cmdLineBaseUrl?: strin
 
   // Single server in OpenAPI spec
   if (api.servers && api.servers.length === 1 && api.servers[0].url) {
-    return normalizeUrl(api.servers[0].url);
+    return normalizeUrl(resolveServerUrl(api.servers[0]));
   }
 
   // Multiple servers - use first one with warning
@@ -26,11 +26,28 @@ export function determineBaseUrl(api: OpenAPIV3.Document, cmdLineBaseUrl?: strin
     console.warn(
       `Multiple servers found. Using first: "${api.servers[0].url}". Use --base-url to override.`
     );
-    return normalizeUrl(api.servers[0].url);
+    return normalizeUrl(resolveServerUrl(api.servers[0]));
   }
 
   // No server information available
   return null;
+}
+
+/**
+ * Substitutes an OpenAPI Server Object's `{variables}` with their default values.
+ * A variable without a definition is left in place, with a warning.
+ *
+ * @param server OpenAPI server object
+ * @returns The server URL with variables resolved
+ */
+export function resolveServerUrl(server: OpenAPIV3.ServerObject): string {
+  const variables = server.variables ?? {};
+  return server.url.replace(/\{([^}]+)\}/g, (match, name: string) => {
+    const variable = variables[name];
+    if (variable && variable.default !== undefined) return String(variable.default);
+    console.warn(`Server URL "${server.url}" uses undefined variable {${name}}; leaving it as is.`);
+    return match;
+  });
 }
 
 /**

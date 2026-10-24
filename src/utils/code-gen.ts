@@ -79,7 +79,7 @@ export function generateToolDefinitionMap(
     method: "${tool.method}",
     pathTemplate: "${tool.pathTemplate}",
     executionParameters: ${execParamsString},
-    requestBodyContentType: ${tool.requestBodyContentType ? `"${tool.requestBodyContentType}"` : 'undefined'},
+    requestBodyContentType: ${tool.requestBodyContentType ? `"${tool.requestBodyContentType}"` : 'undefined'},${tool.serverUrl !== undefined ? `\n    serverUrl: ${JSON.stringify(tool.serverUrl)},` : ''}
     securityRequirements: ${securityReqsString},
     tags: ${tagsString},
     deprecated: ${tool.deprecated ? 'true' : 'false'},
@@ -199,6 +199,36 @@ function formatSchemaErrors(errors: OutputUnit[]): string {
 function validateToolArguments(toolName: string, inputSchema: unknown, args: unknown): string | null {
     const result = getSchemaValidator(\`input:\${toolName}\`, inputSchema).validate(args);
     return result.valid ? null : \`Invalid arguments for tool '\${toolName}': \${formatSchemaErrors(result.errors)}\`;
+}
+`;
+}
+
+/**
+ * Generates the helper that picks the upstream base URL for one operation:
+ * an absolute operation/path-item server replaces the base URL; a relative one
+ * resolves against it. Shared by the Node and Worker targets.
+ *
+ * @returns Generated TypeScript source
+ */
+export function generateServerUrlResolutionCode(): string {
+  return `
+/**
+ * Base URL for one operation. Without an operation or path-item server this is
+ * the configured base URL (API_BASE_URL, else the spec's root server). An
+ * absolute operation/path-item server is used as is, even when API_BASE_URL is
+ * set; a relative one resolves against the configured base URL ("v2" appends a
+ * segment, "/v2" replaces the path).
+ */
+function resolveOperationBaseUrl(serverUrl: string | undefined, baseUrl: string): string {
+    if (!serverUrl) return baseUrl;
+    const isAbsolute = (url: string) => /^[a-z][a-z0-9+.-]*:\\/\\//i.test(url);
+    if (isAbsolute(serverUrl)) return serverUrl.replace(/\\/+$/, '');
+    if (isAbsolute(baseUrl)) {
+        return new URL(serverUrl, baseUrl.replace(/\\/*$/, '/')).href.replace(/\\/+$/, '');
+    }
+    // Both relative: join the paths.
+    if (serverUrl.startsWith('/')) return serverUrl.replace(/\\/+$/, '');
+    return \`\${baseUrl.replace(/\\/+$/, '')}/\${serverUrl}\`.replace(/\\/+$/, '');
 }
 `;
 }

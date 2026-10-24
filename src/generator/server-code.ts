@@ -7,6 +7,7 @@ import {
   generateCallToolHandler,
   generateListToolsHandler,
   generateSchemaValidationCode,
+  generateServerUrlResolutionCode,
 } from '../utils/code-gen.js';
 import {
   generateExecuteApiToolFunction,
@@ -178,6 +179,7 @@ interface McpToolDefinition {
     pathTemplate: string;
     executionParameters: { name: string, in: string }[];
     requestBodyContentType?: string;
+    serverUrl?: string;
     securityRequirements: any[];
     tags?: string[];
     deprecated?: boolean;
@@ -204,7 +206,7 @@ ${toolDefinitionMapCode}
  * Security schemes from the OpenAPI spec
  */
 const securitySchemes = ${JSON.stringify(api.components?.securitySchemes || {}, null, 2).replace(/^/gm, '  ')};
-${generateSchemaValidationCode()}
+${generateSchemaValidationCode()}${generateServerUrlResolutionCode()}
 /**
  * Creates a fresh MCP server instance with the tool handlers registered.
  * Transports call this once per request, connection or era probe: an SDK server

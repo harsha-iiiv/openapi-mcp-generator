@@ -124,6 +124,11 @@ export interface McpToolDefinition {
   executionParameters: { name: string; in: string }[];
   /** Content type for request body, if applicable */
   requestBodyContentType?: string;
+  /**
+   * Server URL declared on the operation or its path item (variables resolved).
+   * Absolute URLs replace the base URL; relative ones resolve against it.
+   */
+  serverUrl?: string;
   /** Security requirements for this operation */
   securityRequirements: OpenAPIV3.SecurityRequirementObject[];
   /** Original operation ID from the OpenAPI spec */

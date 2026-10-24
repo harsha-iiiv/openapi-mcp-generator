@@ -7,6 +7,7 @@ import { createHash } from 'crypto';
 import { generateOperationId } from '../utils/code-gen.js';
 import { McpToolAnnotations, McpToolDefinition } from '../types/index.js';
 import { shouldIncludeOperationForMcp } from '../utils/helpers.js';
+import { normalizeUrl, resolveServerUrl } from '../utils/url.js';
 
 /** Default maximum tool name length (Claude Desktop limit). */
 export const DEFAULT_MAX_TOOL_NAME_LENGTH = 64;
@@ -327,6 +328,10 @@ export function extractToolsFromApi(
       const deprecated = operation.deprecated === true;
 
       // Create the tool definition
+      // Operation servers win over path-item servers; the root server is the default base URL.
+      const server = operation.servers?.[0] ?? pathItem.servers?.[0];
+      const serverUrl = server?.url ? normalizeUrl(resolveServerUrl(server)) : undefined;
+
       const title = getToolTitle(operation);
       tools.push({
         name: finalToolName,
@@ -339,6 +344,7 @@ export function extractToolsFromApi(
         executionParameters,
         requestBodyContentType,
         securityRequirements,
+        ...(serverUrl !== undefined && { serverUrl }),
         operationId: originalOperationId,
         tags,
         deprecated,
