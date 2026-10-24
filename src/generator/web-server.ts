@@ -39,11 +39,17 @@ import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { streamSSE } from 'hono/streaming';
 import { v4 as uuid } from 'uuid';
-import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { JSONRPCMessage, JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  isJSONRPCErrorResponse,
+  isJSONRPCNotification,
+  isJSONRPCRequest,
+  isJSONRPCResponse,
+  type JSONRPCMessage,
+  type Server,
+  type Transport,
+} from "@modelcontextprotocol/server";
 import type { Context } from 'hono';
 import type { SSEStreamingApi } from 'hono/streaming';
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 // Import server configuration constants
 import { SERVER_NAME, SERVER_VERSION } from './index.js';${headerStoreImport}${generateNodeInboundAuthImports(inboundAuth)}${generateNodePlaygroundImports()}
@@ -121,8 +127,16 @@ async handlePostMessage(c: Context): Promise<Response> {
     const body = await c.req.json();
     
     try {
-      // Parse and validate the message
-      const parsedMessage = JSONRPCMessageSchema.parse(body);
+      // Validate the message shape (the server validates method parameters)
+      if (
+        !isJSONRPCRequest(body) &&
+        !isJSONRPCNotification(body) &&
+        !isJSONRPCResponse(body) &&
+        !isJSONRPCErrorResponse(body)
+      ) {
+        throw new Error('Not a JSON-RPC message');
+      }
+      const parsedMessage: JSONRPCMessage = body;
       
       // Forward to the message handler
       if (this.onmessage) {

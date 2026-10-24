@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking: MCP 2026-07-28 via MCP TypeScript SDK v2 (#79)
+
+- Generated servers depend on `@modelcontextprotocol/server` (SDK v2) instead of
+  `@modelcontextprotocol/sdk`, and serve both protocol eras: MCP 2026-07-28 clients
+  (`server/discover`, per-request metadata, no sessions) and 2025-era clients (`initialize`).
+  Regenerate and run `npm install`; customized code that imported from
+  `@modelcontextprotocol/sdk` must update its imports.
+  - stdio: `serveStdio` selects the era from each connection's opening message.
+  - streamable-http and cloudflare-worker: `createMcpHandler` serves every request
+    statelessly. 2025-era clients are served without sessions (GET and DELETE answer `405`),
+    so servers scale behind any load balancer. `MCP_SESSION_IDLE_TIMEOUT` no longer applies.
+  - web (SSE) stays on the 2025-era protocol, because the specification deprecates HTTP+SSE.
+- The Worker registers tools on the low-level server, validates arguments with the
+  build-time zod shapes, and returns the original JSON Schema from `tools/list`.
+- Verified with the official v2 client pinned to 2026-07-28 on stdio, Streamable HTTP and the
+  Worker, and with the v1 client for the 2025 era.
+
 ### Added
 
 - A browser playground for generated `web`, `streamable-http` and `cloudflare-worker` servers,
@@ -14,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists, JSON bodies with a schema example), runs them and shows every JSON-RPC message, with
   copy-as-curl and client configs for Claude Code, Cursor, VS Code and the MCP Inspector. It
   supports `--inbound-auth bearer` tokens, explains 401, 403 (`MCP_ALLOWED_ORIGINS`) and expired
-  sessions, starts a new session when one expires, and follows light and dark mode. The page and
+  sessions (on servers that use them), and follows light and dark mode. The page and
   its dependency-free MCP client live in `playground/` and are tested against real generated
   servers; the same files are hosted at https://mcp.pidata.tech/playground. `MCP_PLAYGROUND=off`
   turns it off.
@@ -31,6 +48,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   required `Accept` header and called `listTools` / `callTool` instead of `tools/list` /
   `tools/call`. They also inserted server output into the page as HTML.
 - Node HTTP servers expose `mcp-protocol-version` and `WWW-Authenticate` to browser clients.
+- OpenAPI 3.0 boolean `exclusiveMinimum` and `exclusiveMaximum` are converted to JSON Schema
+  numeric bounds, including inside nested schemas (`allOf`/`anyOf`/`oneOf`, `not`,
+  `additionalProperties`, nullable objects). Thanks @sean0407 (#77, #87).
+
+### Upgrading from 4.x
+
+1. Commit or back up your generated project. Regenerating with `--force` overwrites generated
+   files, including any edits you made to them.
+2. Regenerate with the same flags as before:
+   `npx openapi-mcp-generator@5 --input ./openapi.json --output ./my-mcp --force`.
+3. Run `npm install` in the project. Node projects now depend on `@modelcontextprotocol/server`
+   `^2.4.0` instead of `@modelcontextprotocol/sdk`; Worker projects depend on
+   `@modelcontextprotocol/server` and `zod`.
+4. Move customized code to SDK v2: import from `@modelcontextprotocol/server` (stdio helpers
+   from `@modelcontextprotocol/server/stdio`) instead of `@modelcontextprotocol/sdk/...`.
+   `createServer()` returns the low-level v2 `Server`, and transports are wired with
+   `serveStdio` and `createMcpHandler`.
+5. Streamable HTTP and Worker servers are stateless: no `mcp-session-id`, `GET` and `DELETE` on
+   `/mcp` answer `405`, and `MCP_SESSION_IDLE_TIMEOUT` is ignored. Tool calls over `POST` work
+   as before; clients that kept a `GET` stream open for server notifications no longer get one.
+6. Unchanged from 4.2: upstream credential variables and Worker secret names,
+   `--inbound-auth`, `--header-passthrough` and `MCP_ALLOWED_ORIGINS`. stdio and 2025-era
+   clients that start with `initialize` keep working.
+7. Not ready to move? Pin the previous major: `npx openapi-mcp-generator@4 ...`.
 
 ## [4.2.0] - 2026-10-23
 

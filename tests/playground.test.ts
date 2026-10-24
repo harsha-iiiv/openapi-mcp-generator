@@ -320,7 +320,8 @@ describe('playground: streamable-http (Node)', () => {
     });
     const init = await client.connect();
     expect(init.serverInfo.name).toBeTruthy();
-    expect(client.sessionId).toBeTruthy();
+    // SDK v2 serves 2025-era clients statelessly: no mcp-session-id is issued.
+    expect(client.sessionId).toBeUndefined();
     const tools = await client.listTools();
     expect(tools.map((t: any) => t.name).sort()).toEqual(['createPet', 'getPet', 'listPets']);
     const pet = await client.callTool('getPet', { petId: 7 });
@@ -363,24 +364,24 @@ describe('playground: streamable-http (Node)', () => {
     await client.connect();
     const command = client.curl('tools/call', { name: 'getPet', arguments: { petId: 1 } });
     expect(command).toContain(`${base}/mcp`);
-    expect(command).toContain(`mcp-session-id: ${client.sessionId}`);
+    expect(command).not.toContain('mcp-session-id');
+    expect(command).toContain('mcp-protocol-version: ');
     expect(command).toContain('$MCP_AUTH_TOKEN');
     expect(command).not.toContain(token);
     await client.close();
   });
 
-  it('starts a new session when the old one is gone', async () => {
+  it('works without sessions: calls keep succeeding and close() accepts 405 on DELETE', async () => {
     const client = new McpClient({ url: `${base}/mcp`, token });
     await client.connect();
-    const first = client.sessionId;
-    await fetch(`${base}/mcp`, {
+    expect(firstText(await client.callTool('getPet', { petId: 3 }))).toContain('/pets/3');
+    const del = await fetch(`${base}/mcp`, {
       method: 'DELETE',
-      headers: { authorization: `Bearer ${token}`, 'mcp-session-id': first! },
+      headers: { authorization: `Bearer ${token}` },
     });
-    const result = await client.callTool('getPet', { petId: 3 });
-    expect(firstText(result)).toContain('/pets/3');
-    expect(client.sessionId).not.toBe(first);
-    await client.close();
+    expect(del.status).toBe(405);
+    expect(firstText(await client.callTool('getPet', { petId: 4 }))).toContain('/pets/4');
+    await expect(client.close()).resolves.not.toThrow();
   });
 
   it('MCP_PLAYGROUND=off stops serving the page but not MCP', async () => {

@@ -49,7 +49,8 @@ Out of scope:
   MCP request needs `Authorization: Bearer <token>`. Tokens are read at runtime from
   `MCP_AUTH_TOKEN` (or comma-separated `MCP_AUTH_TOKENS` for rotation) and compared in constant
   time on SHA-256 digests. The endpoint fails closed (`503`) when no token is configured, and
-  Streamable HTTP and SSE sessions are bound to the token that opened them.
+  SSE sessions are bound to the token that opened them; stateless Streamable HTTP checks the
+  token on every request.
 - **Browser origins** are validated on Node HTTP servers: requests whose `Origin` is not
   loopback or listed in `MCP_ALLOWED_ORIGINS` are refused, which blocks DNS rebinding.
 - **Upstream security requirements** follow OpenAPI semantics: alternatives are tried in order,
@@ -57,9 +58,6 @@ Out of scope:
   never sent.
 - **`--header-passthrough`** forwards only the headers you list, and refuses `Authorization`
   while inbound auth is on (it would leak the MCP token upstream).
-- **Streamable HTTP sessions** are released when they close and expire after
-  `MCP_SESSION_IDLE_TIMEOUT` seconds with no request or open stream (default 1800), so abandoned sessions cannot
-  accumulate.
 - **stdio servers** have no network endpoint; only the process that launches them can talk to
   them.
 

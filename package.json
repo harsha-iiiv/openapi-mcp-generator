@@ -58,7 +58,9 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261024.1",
     "@hono/node-server": "^1.19.17",
+    "@modelcontextprotocol/client": "^2.4.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@modelcontextprotocol/server": "^2.4.0",
     "@types/node": "^22.17.2",
     "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^8.39.1",

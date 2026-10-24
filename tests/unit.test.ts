@@ -727,13 +727,14 @@ describe('cloudflare-worker target', () => {
     });
     const index = fileContent(files, 'src/index.ts');
 
-    expect(index).toContain("import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'");
     expect(index).toContain(
-      "import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'"
+      "import { createMcpHandler, Server, type CallToolResult } from '@modelcontextprotocol/server'"
     );
     expect(index).toContain("const MCP_ROUTE = '/mcp'");
-    expect(index).toContain('new WebStandardStreamableHTTPServerTransport()');
-    expect(index).toContain('transport.handleRequest(request)');
+    // One handler per request serves MCP 2026-07-28 and 2025-era clients.
+    expect(index).toContain(
+      'createMcpHandler(() => createServer(env, forwardedHeaders)).fetch(request)'
+    );
     expect(index).toContain('await fetch(');
     // No dependency on the Cloudflare `agents` package (raw SDK transport only).
     expect(index).not.toContain('agents/mcp');

@@ -31,8 +31,8 @@ export function generatePackageJson(
       node: '>=20.0.0',
     },
     dependencies: {
-      // >= 1.26: web-standard Streamable HTTP transport; one server instance per transport.
-      '@modelcontextprotocol/sdk': '^1.26.0',
+      // MCP TypeScript SDK v2: serves MCP 2026-07-28 and 2025-era clients.
+      '@modelcontextprotocol/server': '^2.4.0',
       axios: '^1.9.0',
       dotenv: '^16.4.5',
       zod: '^3.24.3',
