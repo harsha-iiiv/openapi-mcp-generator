@@ -3,8 +3,23 @@
  */
 import { OpenAPIV3 } from 'openapi-types';
 
+type OAuthFlowWithScopes = { scopes?: { [scope: string]: string } };
+
+function scopesList(flow: OAuthFlowWithScopes | undefined): string {
+  if (!flow?.scopes || Object.keys(flow.scopes).length === 0) return '';
+  let content = '\n**Available Scopes:**\n\n';
+  for (const [scope, description] of Object.entries(flow.scopes)) {
+    content += `- \`${scope}\`: ${description}\n`;
+  }
+  return content;
+}
+
 /**
- * Generates documentation about OAuth2 configuration
+ * Generates documentation about OAuth2 configuration.
+ *
+ * It mirrors what generated servers do at runtime: `OAUTH_TOKEN_<SCHEME>` works for
+ * every flow, and only schemes with a client credentials or password flow can fetch a
+ * token themselves from `OAUTH_CLIENT_ID_<SCHEME>` and `OAUTH_CLIENT_SECRET_<SCHEME>`.
  *
  * @param securitySchemes Security schemes from OpenAPI spec
  * @returns Markdown documentation about OAuth2 configuration
@@ -16,17 +31,12 @@ export function generateOAuth2Docs(
     return '# OAuth2 Configuration\n\nNo OAuth2 security schemes defined in this API.';
   }
 
-  let oauth2Schemes: { name: string; scheme: OpenAPIV3.OAuth2SecurityScheme }[] = [];
+  const oauth2Schemes: { name: string; scheme: OpenAPIV3.OAuth2SecurityScheme }[] = [];
 
-  // Find OAuth2 schemes
   for (const [name, schemeOrRef] of Object.entries(securitySchemes)) {
     if ('$ref' in schemeOrRef) continue;
-
     if (schemeOrRef.type === 'oauth2') {
-      oauth2Schemes.push({
-        name,
-        scheme: schemeOrRef,
-      });
+      oauth2Schemes.push({ name, scheme: schemeOrRef });
     }
   }
 
@@ -34,18 +44,25 @@ export function generateOAuth2Docs(
     return '# OAuth2 Configuration\n\nNo OAuth2 security schemes defined in this API.';
   }
 
+  const canFetchToken = (scheme: OpenAPIV3.OAuth2SecurityScheme) =>
+    Boolean(scheme.flows?.clientCredentials || scheme.flows?.password);
+  const anyFetches = oauth2Schemes.some(({ scheme }) => canFetchToken(scheme));
+
   let content = `# OAuth2 Configuration
 
-This API uses OAuth2 for authentication. The MCP server can handle OAuth2 authentication in the following ways:
+This API uses OAuth2 for authentication. The MCP server can authenticate in the following ways:
 
-1. **Using a pre-acquired token**: You provide a token you've already obtained
-2. **Using client credentials flow**: The server automatically acquires a token using your client ID and secret
-
+1. **Using a pre-acquired token**: set \`OAUTH_TOKEN_<SCHEME>\` to a token you already obtained. This works for every flow.
+`;
+  if (anyFetches) {
+    content += `2. **Fetching a token itself**: for schemes with a client credentials or password flow, the server requests a token with your client ID and secret.
+`;
+  }
+  content += `
 ## Environment Variables
 
 `;
 
-  // Document each OAuth2 scheme
   for (const { name, scheme } of oauth2Schemes) {
     content += `### ${name}\n\n`;
 
@@ -53,65 +70,64 @@ This API uses OAuth2 for authentication. The MCP server can handle OAuth2 authen
       content += `${scheme.description}\n\n`;
     }
 
-    content += '**Configuration Variables:**\n\n';
-
     const envVarPrefix = name.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+    const fetches = canFetchToken(scheme);
 
-    content += `- \`OAUTH_CLIENT_ID_${envVarPrefix}\`: Your OAuth client ID\n`;
-    content += `- \`OAUTH_CLIENT_SECRET_${envVarPrefix}\`: Your OAuth client secret\n`;
-
-    if (scheme.flows?.clientCredentials) {
+    content += '**Configuration Variables:**\n\n';
+    if (fetches) {
+      content += `- \`OAUTH_TOKEN_${envVarPrefix}\`: Pre-acquired OAuth token (optional when the client ID and secret are set)\n`;
+      content += `- \`OAUTH_CLIENT_ID_${envVarPrefix}\`: Your OAuth client ID\n`;
+      content += `- \`OAUTH_CLIENT_SECRET_${envVarPrefix}\`: Your OAuth client secret\n`;
       content += `- \`OAUTH_SCOPES_${envVarPrefix}\`: Space-separated list of scopes to request (optional)\n`;
-      content += `- \`OAUTH_TOKEN_${envVarPrefix}\`: Pre-acquired OAuth token (optional if using client credentials)\n\n`;
+    } else {
+      content += `- \`OAUTH_TOKEN_${envVarPrefix}\`: Pre-acquired OAuth token (required). The server cannot fetch tokens for this scheme's flows, so obtain one with your OAuth client and set it here.\n`;
+    }
+    content += '\n';
 
+    const { clientCredentials, password, authorizationCode, implicit } = scheme.flows ?? {};
+
+    if (clientCredentials) {
       content += '**Client Credentials Flow:**\n\n';
-      content += `- Token URL: \`${scheme.flows.clientCredentials.tokenUrl}\`\n`;
-
-      if (
-        scheme.flows.clientCredentials.scopes &&
-        Object.keys(scheme.flows.clientCredentials.scopes).length > 0
-      ) {
-        content += '\n**Available Scopes:**\n\n';
-
-        for (const [scope, description] of Object.entries(scheme.flows.clientCredentials.scopes)) {
-          content += `- \`${scope}\`: ${description}\n`;
-        }
-      }
-
+      content += `- Token URL: \`${clientCredentials.tokenUrl}\`\n`;
+      content += scopesList(clientCredentials);
       content += '\n';
     }
 
-    if (scheme.flows?.authorizationCode) {
-      content += `- \`OAUTH_TOKEN_${envVarPrefix}\`: Pre-acquired OAuth token (required for authorization code flow)\n\n`;
+    if (password) {
+      content += '**Password Flow:**\n\n';
+      content += `- Token URL: \`${password.tokenUrl}\`\n`;
+      content += scopesList(password);
+      content += '\n';
+    }
 
+    if (authorizationCode) {
       content += '**Authorization Code Flow:**\n\n';
-      content += `- Authorization URL: \`${scheme.flows.authorizationCode.authorizationUrl}\`\n`;
-      content += `- Token URL: \`${scheme.flows.authorizationCode.tokenUrl}\`\n`;
+      content += `- Authorization URL: \`${authorizationCode.authorizationUrl}\`\n`;
+      content += `- Token URL: \`${authorizationCode.tokenUrl}\`\n`;
+      content += scopesList(authorizationCode);
+      content += '\n';
+    }
 
-      if (
-        scheme.flows.authorizationCode.scopes &&
-        Object.keys(scheme.flows.authorizationCode.scopes).length > 0
-      ) {
-        content += '\n**Available Scopes:**\n\n';
-
-        for (const [scope, description] of Object.entries(scheme.flows.authorizationCode.scopes)) {
-          content += `- \`${scope}\`: ${description}\n`;
-        }
-      }
-
+    if (implicit) {
+      content += '**Implicit Flow:**\n\n';
+      content += `- Authorization URL: \`${implicit.authorizationUrl}\`\n`;
+      content += scopesList(implicit);
       content += '\n';
     }
   }
 
-  content += `## Token Caching
+  if (anyFetches) {
+    content += `## Token Caching
 
-The MCP server automatically caches OAuth tokens obtained via client credentials flow. Tokens are cached for their lifetime (as specified by the \`expires_in\` parameter in the token response) minus 60 seconds as a safety margin.
+The MCP server caches tokens it fetches with a client ID and secret. Tokens are cached for their lifetime (as specified by the \`expires_in\` parameter in the token response) minus 60 seconds as a safety margin.
 
 When making API requests, the server will:
+
 1. Check for a cached token that's still valid
 2. Use the cached token if available
 3. Request a new token if no valid cached token exists
 `;
+  }
 
   return content;
 }

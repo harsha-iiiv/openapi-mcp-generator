@@ -34,8 +34,8 @@ PORT=3000
 LOG_LEVEL=info
 # Override the target API base URL at runtime. Takes precedence over the value
 # baked in from the OpenAPI servers list, so you can switch environments
-# (staging/prod) without regenerating. Omit to use the spec-derived default.
-API_BASE_URL=your_api_base_url_here
+# (staging/prod) without regenerating. Leave it commented out to use the spec-derived default.
+# API_BASE_URL=https://api.example.com
 
 `;
 

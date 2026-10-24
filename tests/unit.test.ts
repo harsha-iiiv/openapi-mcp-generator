@@ -39,6 +39,8 @@ import { generateMcpServerCode, generateCustomAuthStub } from '../src/generator/
 import { generateCloudflareWorkerFiles } from '../src/generator/cloudflare-worker.js';
 import { getToolsFromOpenApi } from '../src/api.js';
 import { generatePackageJson } from '../src/generator/package-json.js';
+import { generateEnvExample } from '../src/generator/env-file.js';
+import { generateOAuth2Docs } from '../src/generator/oauth-docs.js';
 import rootPackageJson from '../package.json' with { type: 'json' };
 import type { McpToolDefinition } from '../src/types/index.js';
 
@@ -1435,5 +1437,60 @@ describe('resolveServerUrl', () => {
     const started = Date.now();
     resolveServerUrl({ url: 'https://x/' + '{'.repeat(50_000) });
     expect(Date.now() - started).toBeLessThan(500);
+  });
+});
+
+// --- generated docs, .env.example and OAuth logging ---------------------------
+
+describe('generated .env.example', () => {
+  it('leaves API_BASE_URL commented out so the spec-derived URL stays the default', () => {
+    const env = generateEnvExample(undefined);
+    expect(env).not.toMatch(/^API_BASE_URL=/m);
+    expect(env).toMatch(/^# API_BASE_URL=/m);
+  });
+});
+
+describe('generated OAuth2 docs', () => {
+  const implicitOnly: OpenAPIV3.ComponentsObject['securitySchemes'] = {
+    petstore_auth: {
+      type: 'oauth2',
+      flows: {
+        implicit: {
+          authorizationUrl: 'https://example.com/oauth/authorize',
+          scopes: { 'read:pets': 'read your pets' },
+        },
+      },
+    },
+  };
+  const clientCredentials: OpenAPIV3.ComponentsObject['securitySchemes'] = {
+    machine: {
+      type: 'oauth2',
+      flows: { clientCredentials: { tokenUrl: 'https://example.com/token', scopes: {} } },
+    },
+  };
+
+  it('documents only OAUTH_TOKEN for flows the server cannot fetch tokens for', () => {
+    const docs = generateOAuth2Docs(implicitOnly);
+    expect(docs).toContain('`OAUTH_TOKEN_PETSTORE_AUTH`');
+    expect(docs).not.toContain('OAUTH_CLIENT_ID_PETSTORE_AUTH');
+    expect(docs).not.toContain('OAUTH_CLIENT_SECRET_PETSTORE_AUTH');
+    expect(docs).toContain('**Implicit Flow:**');
+    expect(docs).not.toContain('## Token Caching');
+  });
+
+  it('documents client credentials and token caching when the server can fetch tokens', () => {
+    const docs = generateOAuth2Docs(clientCredentials);
+    expect(docs).toContain('`OAUTH_CLIENT_ID_MACHINE`');
+    expect(docs).toContain('`OAUTH_CLIENT_SECRET_MACHINE`');
+    expect(docs).toContain('`OAUTH_TOKEN_MACHINE`');
+    expect(docs).toMatch(/\n\n## Token Caching\n/);
+  });
+});
+
+describe('OAuth2 token acquisition logging', () => {
+  it('does not log the token URL', () => {
+    const code = generateOAuth2TokenAcquisitionCode();
+    expect(code).not.toContain('Requesting OAuth2 token from');
+    expect(code).toContain("Requesting OAuth2 token for '");
   });
 });
