@@ -70,7 +70,9 @@ function startUpstream(): Promise<Upstream> {
       };
       requests.push(record);
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ method: record.method, path: record.path, query: record.query, body }));
+      res.end(
+        JSON.stringify({ method: record.method, path: record.path, query: record.query, body })
+      );
     });
   });
   return new Promise((resolve) =>
@@ -122,9 +124,10 @@ function featureSpec(upstream: string): OpenAPIV3.Document {
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['name'],
+                  required: ['id', 'name'],
                   properties: {
-                    name: { type: 'string', minLength: 1 },
+                    id: { type: 'integer', readOnly: true },
+                    name: { type: 'string', minLength: 1, example: 'Rex' },
                     age: { type: 'integer', minimum: 0 },
                     owner: {
                       type: 'object',
@@ -258,6 +261,46 @@ afterAll(async () => {
 });
 
 // --- argument validation ----------------------------------------------------------
+
+describe('input schema fidelity seen by clients', () => {
+  let clients: AnyClient[] = [];
+
+  beforeAll(async () => {
+    clients = await connectAll(workdir, 'fidelity', featureSpec(upstream.url));
+  }, 120_000);
+
+  afterAll(async () => {
+    for (const client of clients) await client.close();
+  });
+
+  it('lists integer types, examples and request bodies without readOnly properties', async () => {
+    for (const client of clients) {
+      const { tools } = await client.listTools();
+      const getPet = tools.find((t) => t.name === 'getPet');
+      expect(getPet.inputSchema.properties.petId.type, client.label).toBe('integer');
+      expect(getPet.inputSchema.properties.limit, client.label).toMatchObject({
+        type: 'integer',
+        minimum: 1,
+        maximum: 100,
+      });
+      const body = tools.find((t) => t.name === 'createPet').inputSchema.properties.requestBody;
+      expect(body.properties.id, client.label).toBeUndefined();
+      expect(body.required, client.label).toEqual(['name']);
+      expect(body.properties.name.examples, client.label).toEqual(['Rex']);
+    }
+  });
+
+  it('enforces integer and range constraints', async () => {
+    for (const client of clients) {
+      const fractional = await client.callTool('getPet', { petId: 1.5 });
+      expect(fractional.isError, client.label).toBe(true);
+      expect(textOf(fractional), client.label).toContain('Expected "integer"');
+      const outOfRange = await client.callTool('getPet', { petId: 1, limit: 0 });
+      expect(outOfRange.isError, client.label).toBe(true);
+      expect(textOf(outOfRange), client.label).toContain('/limit:');
+    }
+  });
+});
 
 describe('argument validation with JSON Schema (no eval)', () => {
   let clients: AnyClient[] = [];

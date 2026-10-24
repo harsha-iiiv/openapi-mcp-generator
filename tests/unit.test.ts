@@ -160,6 +160,108 @@ describe('#68 external $ref SSRF guard', () => {
   });
 });
 
+// --- JSON Schema fidelity --------------------------------------------------------
+
+describe('JSON Schema fidelity of input schemas', () => {
+  it('keeps integer types, including nullable integers', () => {
+    expect(mapOpenApiSchemaToJsonSchema({ type: 'integer', format: 'int64' })).toEqual({
+      type: 'integer',
+      format: 'int64',
+    });
+    expect(
+      mapOpenApiSchemaToJsonSchema({ type: 'integer', nullable: true } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: ['integer', 'null'] });
+  });
+
+  it('turns example into examples, keeping an existing examples array', () => {
+    expect(mapOpenApiSchemaToJsonSchema({ type: 'string', example: 'rex' })).toEqual({
+      type: 'string',
+      examples: ['rex'],
+    });
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'string',
+        example: 'ignored',
+        examples: ['a', 'b'],
+      } as unknown as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'string', examples: ['a', 'b'] });
+    // An example of `false` or `null` is still an example.
+    expect(mapOpenApiSchemaToJsonSchema({ type: 'boolean', example: false })).toEqual({
+      type: 'boolean',
+      examples: [false],
+    });
+  });
+
+  it('keeps format, pattern, enums and composition keywords as written', () => {
+    const source = {
+      type: 'object',
+      properties: {
+        email: { type: 'string', format: 'email', pattern: '^.+@.+$' },
+        status: { type: 'string', enum: ['a', 'b'] },
+        either: { oneOf: [{ type: 'integer' }, { type: 'string', format: 'uuid' }] },
+        both: { allOf: [{ type: 'object' }], anyOf: [{ required: ['x'] }] },
+      },
+    } as unknown as OpenAPIV3.SchemaObject;
+    expect(mapOpenApiSchemaToJsonSchema(source)).toEqual(source);
+  });
+
+  const petApi = {
+    openapi: '3.0.3',
+    info: { title: 'pets', version: '1' },
+    paths: {
+      '/pets': {
+        post: {
+          operationId: 'createPet',
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['id', 'name'],
+                  properties: {
+                    id: { type: 'integer', readOnly: true },
+                    name: { type: 'string' },
+                    password: { type: 'string', writeOnly: true },
+                    owner: {
+                      type: 'object',
+                      required: ['createdAt'],
+                      properties: {
+                        createdAt: { type: 'string', format: 'date-time', readOnly: true },
+                        email: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: { '200': { description: 'ok' } },
+        },
+      },
+    },
+  } as unknown as OpenAPIV3.Document;
+
+  it('drops readOnly properties from request input schemas, and from required', () => {
+    const [tool] = extractToolsFromApi(petApi);
+    const body = (tool.inputSchema as any).properties.requestBody;
+    expect(Object.keys(body.properties)).toEqual(['name', 'password', 'owner']);
+    expect(body.required).toEqual(['name']);
+    expect(Object.keys(body.properties.owner.properties)).toEqual(['email']);
+    expect(body.properties.owner.required).toBeUndefined();
+  });
+
+  it('drops writeOnly properties when mapping a response schema', () => {
+    const schema = (petApi.paths['/pets'] as any).post.requestBody.content['application/json']
+      .schema;
+    const mapped = mapOpenApiSchemaToJsonSchema(schema, { direction: 'response' }) as any;
+    expect(Object.keys(mapped.properties)).toEqual(['id', 'name', 'owner']);
+    expect(mapped.required).toEqual(['id', 'name']);
+    // Without a direction nothing is dropped.
+    const neutral = mapOpenApiSchemaToJsonSchema(schema) as any;
+    expect(Object.keys(neutral.properties)).toEqual(['id', 'name', 'password', 'owner']);
+  });
+});
+
 // --- Swagger 2.0 input ----------------------------------------------------------
 
 describe('Swagger 2.0 input fails loudly', () => {
@@ -293,7 +395,7 @@ describe('#77 OpenAPI 3.0 exclusiveMinimum conversion', () => {
     const mapped = mapOpenApiSchemaToJsonSchema({
       allOf: [{ type: 'string', nullable: true, example: 'a' }],
     } as unknown as OpenAPIV3.SchemaObject) as any;
-    expect(mapped.allOf[0]).toEqual({ type: ['string', 'null'] });
+    expect(mapped.allOf[0]).toEqual({ type: ['string', 'null'], examples: ['a'] });
   });
 
   it('does not modify the source schema', () => {

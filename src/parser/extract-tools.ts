@@ -315,7 +315,9 @@ export function generateInputSchemaAndDetails(
   allParameters.forEach((param) => {
     if (!param.name || !param.schema) return;
 
-    const paramSchema = mapOpenApiSchemaToJsonSchema(param.schema as OpenAPIV3.SchemaObject);
+    const paramSchema = mapOpenApiSchemaToJsonSchema(param.schema as OpenAPIV3.SchemaObject, {
+      direction: 'request',
+    });
     if (typeof paramSchema === 'object') {
       paramSchema.description = param.description || paramSchema.description;
     }
@@ -336,7 +338,12 @@ export function generateInputSchemaAndDetails(
 
     if (jsonContent?.schema) {
       requestBodyContentType = 'application/json';
-      const bodySchema = mapOpenApiSchemaToJsonSchema(jsonContent.schema as OpenAPIV3.SchemaObject);
+      const bodySchema = mapOpenApiSchemaToJsonSchema(
+        jsonContent.schema as OpenAPIV3.SchemaObject,
+        {
+          direction: 'request',
+        }
+      );
 
       if (typeof bodySchema === 'object') {
         bodySchema.description =
@@ -408,16 +415,34 @@ function normalizeExclusiveBound(schema: Record<string, any>, bound: 'minimum' |
   }
 }
 
+/** Options for {@link mapOpenApiSchemaToJsonSchema}. */
+export interface MapSchemaOptions {
+  /**
+   * Which side of the exchange the schema describes. 'request' drops properties
+   * marked `readOnly: true` (the API ignores or rejects them in requests);
+   * 'response' drops properties marked `writeOnly: true` (the API never returns
+   * them). Omitted: properties are kept.
+   */
+  direction?: 'request' | 'response';
+}
+
 /**
- * Maps an OpenAPI schema to JSON Schema, recursing into every subschema
- * (properties, items, composition keywords, additionalProperties, ...).
+ * Maps an OpenAPI schema to JSON Schema (2020-12), recursing into every
+ * subschema (properties, items, composition keywords, additionalProperties, ...).
+ *
+ * Types (including `integer`), `format`, `pattern`, enums and composition
+ * keywords are kept as written. OpenAPI-only keywords are removed, `nullable`
+ * becomes a `null` type, a 3.0 boolean exclusive bound becomes a numeric one and
+ * a single `example` becomes `examples: [example]`.
  *
  * @param schema OpenAPI schema object or reference
+ * @param options Mapping options (request/response direction)
  * @param seen Schemas on the current recursion path, used to break cycles
  * @returns JSON Schema representation
  */
 export function mapOpenApiSchemaToJsonSchema(
   schema: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject,
+  options: MapSchemaOptions = {},
   seen: WeakSet<object> = new WeakSet()
 ): JSONSchema7 | boolean {
   // Handle boolean schemas
@@ -446,8 +471,11 @@ export function mapOpenApiSchemaToJsonSchema(
     normalizeExclusiveBound(jsonSchema, 'minimum');
     normalizeExclusiveBound(jsonSchema, 'maximum');
 
-    // Convert integer type to number (JSON Schema compatible)
-    if (schema.type === 'integer') jsonSchema.type = 'number';
+    // OpenAPI's single `example` is JSON Schema's `examples` array.
+    if (!Array.isArray(jsonSchema.examples)) {
+      if (jsonSchema.example !== undefined) jsonSchema.examples = [jsonSchema.example];
+      else delete jsonSchema.examples;
+    }
 
     // Remove OpenAPI-specific properties that aren't in JSON Schema
     delete jsonSchema.nullable;
@@ -471,8 +499,39 @@ export function mapOpenApiSchemaToJsonSchema(
 
     const mapChild = (child: unknown): unknown =>
       child !== null && typeof child === 'object' && !Array.isArray(child)
-        ? mapOpenApiSchemaToJsonSchema(child as OpenAPIV3.SchemaObject, seen)
+        ? mapOpenApiSchemaToJsonSchema(child as OpenAPIV3.SchemaObject, options, seen)
         : child;
+
+    // Drop properties this direction never carries: readOnly ones from requests,
+    // writeOnly ones from responses (and from `required`, so it stays satisfiable).
+    const hiddenKeyword =
+      options.direction === 'request'
+        ? 'readOnly'
+        : options.direction === 'response'
+          ? 'writeOnly'
+          : undefined;
+    const properties = jsonSchema.properties;
+    if (
+      hiddenKeyword &&
+      properties !== null &&
+      typeof properties === 'object' &&
+      !Array.isArray(properties)
+    ) {
+      const hidden = Object.keys(properties).filter((name) => {
+        const child = properties[name];
+        return child !== null && typeof child === 'object' && child[hiddenKeyword] === true;
+      });
+      if (hidden.length > 0) {
+        jsonSchema.properties = Object.fromEntries(
+          Object.entries(properties).filter(([name]) => !hidden.includes(name))
+        );
+        if (Array.isArray(jsonSchema.required)) {
+          const required = jsonSchema.required.filter((name: string) => !hidden.includes(name));
+          if (required.length > 0) jsonSchema.required = required;
+          else delete jsonSchema.required;
+        }
+      }
+    }
 
     for (const keyword of SINGLE_SCHEMA_KEYWORDS) {
       if (keyword in jsonSchema) jsonSchema[keyword] = mapChild(jsonSchema[keyword]);
