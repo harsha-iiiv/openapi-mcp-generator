@@ -987,10 +987,12 @@ describe('#66 basic auth with empty password', () => {
 // --- #41: array query params -------------------------------------------------
 
 describe('#41 array query param serialization', () => {
-  it('emits a paramsSerializer that joins arrays with commas', () => {
+  it('emits a paramsSerializer that follows each parameter style and explode', () => {
     const code = generateExecuteApiToolFunction();
     expect(code).toContain('paramsSerializer');
-    expect(code).toContain("value.join(',')");
+    expect(code).toContain('serializeParameter(key, value, param?.style, param?.explode)');
+    // Commas only for explode: false, not for every array (see parameter-serialization.test.ts).
+    expect(code).not.toContain("value.join(',')");
   });
 });
 

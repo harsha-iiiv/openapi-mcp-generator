@@ -730,6 +730,34 @@ async function resolveSecurityRequirements(
 ${insecurePreamble}${oauth2TokenAcquisitionCode}${securityResolutionHelpers}
 
 /**
+ * Expands one query or cookie parameter into name/value pairs following its
+ * OpenAPI style and explode settings. Arrays repeat the name when exploded
+ * (tag=red&tag=blue) and are joined by ',', ' ' or '|' otherwise (form,
+ * spaceDelimited, pipeDelimited). Objects support form and deepObject.
+ */
+function serializeParameter(
+    name: string,
+    value: unknown,
+    style: string = 'form',
+    explode: boolean = style === 'form'
+): [string, string][] {
+    const separator = style === 'spaceDelimited' ? ' ' : style === 'pipeDelimited' ? '|' : ',';
+    if (Array.isArray(value)) {
+        if (explode) return value.map((item): [string, string] => [name, String(item)]);
+        return [[name, value.map(String).join(separator)]];
+    }
+    if (typeof value === 'object' && value !== null) {
+        const entries = Object.entries(value).filter(([, item]) => item !== undefined && item !== null);
+        if (style === 'deepObject') {
+            return entries.map(([key, item]): [string, string] => [name + '[' + key + ']', String(item)]);
+        }
+        if (explode) return entries.map(([key, item]): [string, string] => [key, String(item)]);
+        return [[name, entries.map(([key, item]) => key + separator + String(item)).join(separator)]];
+    }
+    return [[name, String(value)]];
+}
+
+/**
  * Executes an API tool with the provided arguments
  * 
  * @param toolName Name of the tool to execute
@@ -797,12 +825,16 @@ ${headerPassthroughCode}
       url: requestUrl,
       params: queryParams,
       headers: headers,
-      // Serialize array query params as comma-separated values (issue #41)
+      // Serialize query params by their OpenAPI style and explode settings (issue #41):
+      // repeated keys by default, comma-joined with explode: false
       paramsSerializer: (params: Record<string, any>) => {
         const search = new URLSearchParams();
         for (const [key, value] of Object.entries(params)) {
           if (value === undefined || value === null) continue;
-          search.append(key, Array.isArray(value) ? value.join(',') : String(value));
+          const param = definition.executionParameters.find((p) => p.in === 'query' && p.name === key);
+          for (const [name, item] of serializeParameter(key, value, param?.style, param?.explode)) {
+            search.append(name, item);
+          }
         }
         return search.toString();
       },${insecureAgentToolConfig}

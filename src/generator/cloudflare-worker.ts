@@ -107,7 +107,7 @@ export interface McpToolDefinition {
   inputSchema: any;
   method: string;
   pathTemplate: string;
-  executionParameters: { name: string; in: string }[];
+  executionParameters: { name: string; in: string; style?: string; explode?: boolean }[];
   requestBodyContentType?: string;
   serverUrl?: string;
   securityRequirements: any[];
@@ -401,6 +401,34 @@ export default {
 
 const DEFAULT_BASE_URL = ${JSON.stringify(input.baseUrl)};
 
+/**
+ * Expands one query or cookie parameter into name/value pairs following its
+ * OpenAPI style and explode settings. Arrays repeat the name when exploded
+ * (tag=red&tag=blue) and are joined by ',', ' ' or '|' otherwise (form,
+ * spaceDelimited, pipeDelimited). Objects support form and deepObject.
+ */
+function serializeParameter(
+  name: string,
+  value: unknown,
+  style: string = 'form',
+  explode: boolean = style === 'form'
+): [string, string][] {
+  const separator = style === 'spaceDelimited' ? ' ' : style === 'pipeDelimited' ? '|' : ',';
+  if (Array.isArray(value)) {
+    if (explode) return value.map((item): [string, string] => [name, String(item)]);
+    return [[name, value.map(String).join(separator)]];
+  }
+  if (typeof value === 'object' && value !== null) {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined && item !== null);
+    if (style === 'deepObject') {
+      return entries.map(([key, item]): [string, string] => [name + '[' + key + ']', String(item)]);
+    }
+    if (explode) return entries.map(([key, item]): [string, string] => [key, String(item)]);
+    return [[name, entries.map(([key, item]) => key + separator + String(item)).join(separator)]];
+  }
+  return [[name, String(value)]];
+}
+
 /** Execute one tool by issuing the upstream HTTP request via global fetch. */
 async function executeApiTool(
   def: McpToolDefinition,
@@ -416,7 +444,7 @@ async function executeApiTool(
     );
     // Substitute path params.
     let pathName = def.pathTemplate;
-    const queryParams = new URLSearchParams();
+    const queryPairs: [string, string][] = [];
     let bodyArg: unknown;
 
     for (const p of def.executionParameters) {
@@ -428,8 +456,8 @@ async function executeApiTool(
           encodeURIComponent(String(value))
         );
       } else if (p.in === 'query') {
-        if (Array.isArray(value)) queryParams.set(p.name, value.map(String).join(','));
-        else queryParams.set(p.name, String(value));
+        // OpenAPI style/explode: repeated keys by default, comma-joined with explode: false.
+        queryPairs.push(...serializeParameter(p.name, value, p.style, p.explode));
       } else if (p.in === 'header') {
         // collected below into headers
       }
@@ -456,7 +484,7 @@ async function executeApiTool(
     }
 
     const url = new URL(baseUrl + pathName);
-    queryParams.forEach((v, k) => url.searchParams.set(k, v));
+    for (const [name, value] of queryPairs) url.searchParams.append(name, value);
 
     const headers: Record<string, string> = { accept: 'application/json' };
     for (const p of def.executionParameters) {

@@ -190,7 +190,7 @@ interface McpToolDefinition {
     inputSchema: any;
     method: string;
     pathTemplate: string;
-    executionParameters: { name: string, in: string }[];
+    executionParameters: { name: string, in: string, style?: string, explode?: boolean }[];
     requestBodyContentType?: string;
     serverUrl?: string;
     securityRequirements: any[];

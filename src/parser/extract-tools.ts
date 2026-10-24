@@ -5,7 +5,7 @@ import { OpenAPIV3 } from 'openapi-types';
 import type { JSONSchema7, JSONSchema7TypeName } from 'json-schema';
 import { createHash } from 'crypto';
 import { generateOperationId } from '../utils/code-gen.js';
-import { McpToolAnnotations, McpToolDefinition } from '../types/index.js';
+import { ExecutionParameter, McpToolAnnotations, McpToolDefinition } from '../types/index.js';
 import { shouldIncludeOperationForMcp } from '../utils/helpers.js';
 import { normalizeUrl, resolveServerUrl } from '../utils/url.js';
 
@@ -337,7 +337,7 @@ export function extractToolsFromApi(
       );
 
       // Extract parameter details for execution
-      const executionParameters = parameters.map((p) => ({ name: p.name, in: p.in }));
+      const executionParameters = parameters.map(toExecutionParameter);
 
       // Determine security requirements
       const securityRequirements =
@@ -376,6 +376,22 @@ export function extractToolsFromApi(
   }
 
   return tools;
+}
+
+/**
+ * Execution metadata for one parameter. Query and cookie parameters keep their
+ * OpenAPI `style` and `explode` only when they differ from the defaults (style
+ * form, explode true for form and false for every other style), so specs that
+ * use the defaults generate the same output as before.
+ */
+export function toExecutionParameter(param: OpenAPIV3.ParameterObject): ExecutionParameter {
+  const entry: ExecutionParameter = { name: param.name, in: param.in };
+  if (param.in !== 'query' && param.in !== 'cookie') return entry;
+  const style = param.style ?? 'form';
+  const explode = param.explode ?? style === 'form';
+  if (style !== 'form') entry.style = style;
+  if (explode !== (style === 'form')) entry.explode = explode;
+  return entry;
 }
 
 /**
