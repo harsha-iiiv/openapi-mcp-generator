@@ -1,11 +1,11 @@
-
-# Node dependencies
+# Dependencies
 node_modules
-# Build output
+.pnp
+.pnp.js
+
+# Build outputs
 dist
 build
-
-# Logs
 logs
 *.log
 npm-debug.log*
@@ -14,7 +14,7 @@ yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
 
-# Diagnostic reports
+# Reports
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Runtime data
@@ -23,7 +23,7 @@ pids
 *.seed
 *.pid.lock
 
-# Coverage directory
+# Coverage
 coverage
 *.lcov
 .nyc_output
@@ -31,25 +31,34 @@ coverage
 # Build artifacts
 .grunt
 bower_components
-# build/Release # Covered by build/ above
 jspm_packages/
 web_modules/
 .lock-wscript
 
-# VS Code files
+# Editor settings
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
 *.code-workspace
+.idea
+*.sublime-workspace
+*.sublime-project
 
 # Caches
 .eslintcache
+.stylelintcache
 .node_repl_history
 .browserslistcache
 
 # Environment variables
 .env
-.env.*.local
 .env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OS specific
+.DS_Store
+Thumbs.db

@@ -68,6 +68,9 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir --transport=cloudflare-worker
 ```
 
+The [`examples/`](./examples) folder holds the Swagger Petstore generated with 5.0 for stdio
+(`petstore-mcp`), web (`pet-store-sse`) and StreamableHTTP (`pet-store-streamable-http`).
+
 ### CLI Options
 
 | Option                   | Alias | Description                                                                                                                                    | Default                           |
@@ -107,29 +110,113 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 
 ## 📦 Programmatic API
 
-You can also use this package programmatically in your Node.js applications:
+The package also exports the parser the CLI uses, so you can turn an OpenAPI document into MCP tool
+definitions inside your own Node.js code:
 
-```javascript
+```typescript
 import { getToolsFromOpenApi } from 'openapi-mcp-generator';
 
-// Extract MCP tool definitions from an OpenAPI spec
-const tools = await getToolsFromOpenApi('./petstore.json');
+// From a local file or a URL
+const tools = await getToolsFromOpenApi('./petstore.json', { dereference: true });
 
 // With options
-const filteredTools = await getToolsFromOpenApi('https://example.com/api-spec.json', {
-  baseUrl: 'https://api.example.com',
-  dereference: true,
-  includeTags: ['pets'],
-  excludeOperations: ['deletePet'],
-  filterFn: (tool) => tool.annotations?.readOnlyHint === true,
-});
+const readOnlyPetTools = await getToolsFromOpenApi(
+  'https://petstore3.swagger.io/api/v3/openapi.json',
+  {
+    baseUrl: 'https://petstore3.swagger.io/api/v3',
+    dereference: true,
+    includeTags: ['pet'],
+    excludeOperations: ['deletePet'],
+    filterFn: (tool) => tool.annotations?.readOnlyHint === true,
+  }
+);
+
+for (const tool of readOnlyPetTools) {
+  console.log(`${tool.name}: ${tool.method.toUpperCase()} ${tool.pathTemplate}`);
+}
 ```
 
-Each tool definition includes its `name`, `title`, `description`, `inputSchema`, `annotations`,
-HTTP details (`method`, `pathTemplate`, `serverUrl`, `executionParameters`), security
-requirements, tags and, when the operation has a 2xx JSON object response, `outputSchema`.
+### `getToolsFromOpenApi(spec, options?)`
 
-For full documentation of the programmatic API, see [PROGRAMMATIC_API.md](./PROGRAMMATIC_API.md).
+`spec` is a file path, an http(s) URL or an already parsed `OpenAPIV3.Document`. The function
+returns `Promise<McpToolDefinition[]>`. Swagger 2.0 documents are rejected; convert them first
+(`npx swagger2openapi swagger.json -o openapi.json`).
+
+| Option                                    | Description                                                                                                                    | Default |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `baseUrl`                                 | Override the base URL from the spec's `servers`                                                                                |         |
+| `dereference`                             | Resolve `$ref`s before extracting tools. Without it, referenced schemas stay unresolved and a warning is logged for each one   | `false` |
+| `includeTags` / `excludeTags`             | Keep only, or drop, operations with these tags (case-insensitive)                                                              |         |
+| `includeOperations` / `excludeOperations` | Keep only, or drop, these operations (operationId or tool name). Same rules as the CLI flags: includes combine, exclusions win |         |
+| `excludeOperationIds`                     | Drop these operationIds (older option, applied after the filters above)                                                        |         |
+| `filterFn`                                | Custom predicate `(tool) => boolean`, applied last                                                                             |         |
+| `defaultInclude`                          | Whether operations without an `x-mcp` extension are included                                                                   | `true`  |
+| `allowExternalRefs`                       | Allow external http(s) `$ref`s. Off by default so parsing cannot be used for SSRF                                              | `false` |
+| `maxToolNameLength`                       | Maximum generated tool name length (Claude Desktop allows 64)                                                                  | `64`    |
+
+Filters apply after `x-mcp` filtering. To parse the document yourself, pass the result in:
+
+```typescript
+import SwaggerParser from '@apidevtools/swagger-parser';
+import type { OpenAPIV3 } from 'openapi-types';
+import { getToolsFromOpenApi } from 'openapi-mcp-generator';
+
+const api = (await SwaggerParser.dereference('./openapi.yaml')) as OpenAPIV3.Document;
+const tools = await getToolsFromOpenApi(api);
+```
+
+### Tool definitions
+
+```typescript
+interface McpToolDefinition {
+  name: string; // unique tool name
+  title?: string; // x-mcp-title, else the operation summary
+  description: string;
+  inputSchema: JSONSchema7 | boolean; // JSON Schema 2020-12 for the tool arguments
+  method: string; // get, post, ...
+  pathTemplate: string; // e.g. /pet/{petId}
+  parameters: OpenAPIV3.ParameterObject[];
+  executionParameters: { name: string; in: string }[];
+  requestBodyContentType?: string;
+  serverUrl?: string; // operation or path-item server, variables resolved
+  securityRequirements: OpenAPIV3.SecurityRequirementObject[];
+  operationId: string;
+  tags?: string[];
+  deprecated?: boolean;
+  annotations?: McpToolAnnotations; // readOnlyHint, destructiveHint, idempotentHint, openWorldHint
+  outputSchema?: JSONSchema7; // lowest 2xx application/json response, when it is an object
+}
+```
+
+`inputSchema` keeps `integer` types, turns `example` into `examples` and leaves out `readOnly`
+properties. Annotations come from the HTTP method (GET and HEAD are read-only, DELETE is
+destructive, PUT and DELETE are idempotent) and can be overridden per operation with
+`x-mcp-annotations`. At runtime, each returned tool also carries `baseUrl`, the resolved base URL or an
+empty string. `McpToolDefinition` does not declare it yet, so TypeScript code needs a cast to
+read it.
+
+More filters:
+
+```typescript
+const spec = './petstore.json';
+
+// Only GET operations
+await getToolsFromOpenApi(spec, { dereference: true, filterFn: (tool) => tool.method === 'get' });
+
+// Only operations that require authentication
+await getToolsFromOpenApi(spec, {
+  dereference: true,
+  filterFn: (tool) => tool.securityRequirements.length > 0,
+});
+
+// Read-only user endpoints, without two specific operations
+await getToolsFromOpenApi(spec, {
+  dereference: true,
+  excludeOperationIds: ['deleteUser', 'updateUser'],
+  filterFn: (tool) =>
+    tool.pathTemplate.startsWith('/user') && tool.annotations?.readOnlyHint === true,
+});
+```
 
 ---
 

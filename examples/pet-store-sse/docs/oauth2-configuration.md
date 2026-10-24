@@ -1,9 +1,8 @@
 # OAuth2 Configuration
 
-This API uses OAuth2 for authentication. The MCP server can handle OAuth2 authentication in the following ways:
+This API uses OAuth2 for authentication. The MCP server can authenticate in the following ways:
 
-1. **Using a pre-acquired token**: You provide a token you've already obtained
-2. **Using client credentials flow**: The server automatically acquires a token using your client ID and secret
+1. **Using a pre-acquired token**: set `OAUTH_TOKEN_<SCHEME>` to a token you already obtained. This works for every flow.
 
 ## Environment Variables
 
@@ -11,15 +10,14 @@ This API uses OAuth2 for authentication. The MCP server can handle OAuth2 authen
 
 **Configuration Variables:**
 
-- `OAUTH_CLIENT_ID_PETSTORE_AUTH`: Your OAuth client ID
-- `OAUTH_CLIENT_SECRET_PETSTORE_AUTH`: Your OAuth client secret
+- `OAUTH_TOKEN_PETSTORE_AUTH`: Pre-acquired OAuth token (required). The server cannot fetch tokens for this scheme's flows, so obtain one with your OAuth client and set it here.
 
-## Token Caching
+**Implicit Flow:**
 
-The MCP server automatically caches OAuth tokens obtained via client credentials flow. Tokens are cached for their lifetime (as specified by the `expires_in` parameter in the token response) minus 60 seconds as a safety margin.
+- Authorization URL: `https://petstore3.swagger.io/oauth/authorize`
 
-When making API requests, the server will:
+**Available Scopes:**
 
-1. Check for a cached token that's still valid
-2. Use the cached token if available
-3. Request a new token if no valid cached token exists
+- `write:pets`: modify pets in your account
+- `read:pets`: read your pets
+

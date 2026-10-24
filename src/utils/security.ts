@@ -204,7 +204,7 @@ async function acquireOAuth2Token(schemeName: string, scheme: any, requiredScope
             formData.append('scope', scopes);
         }${bodyCreds}
 
-        console.error(\`Requesting OAuth2 token from \${tokenUrl}\`);
+        console.error(\`Requesting OAuth2 token for '\${schemeName}'\`);
 
         // Make the token request
         const response = await axios({

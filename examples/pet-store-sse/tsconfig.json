@@ -12,11 +12,21 @@
     "module": "Node16",
     "moduleResolution": "Node16",
     "noEmit": false,
+    "rootDir": "./src",
     "outDir": "./build",
     "declaration": true,
     "sourceMap": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "build", "**/*.test.ts"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "build",
+    "**/*.test.ts"
+  ]
 }
