@@ -62,6 +62,7 @@
     "@modelcontextprotocol/client": "^2.4.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@modelcontextprotocol/server": "^2.4.0",
+    "@modelcontextprotocol/server-everything": "^2.0.0",
     "@types/node": "^22.17.2",
     "axios": "^1.20.0",
     "hono": "^4.13.13",
