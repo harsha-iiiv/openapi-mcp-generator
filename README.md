@@ -504,9 +504,15 @@ browser tab.
 
 - The page is served from the server's own origin with a strict Content-Security-Policy, so local
   testing needs no CORS or `MCP_ALLOWED_ORIGINS` changes. Server output is always rendered as text.
+- The page also has Resources, Prompts (with argument completion), Logs and Raw JSON-RPC tabs, shows
+  progress with a Cancel button for long tool calls, and answers server requests: elicitation forms,
+  sampling (you type the reply) and roots.
 - The same open-source page is hosted at [mcp.pidata.tech/playground](https://mcp.pidata.tech/playground)
-  for deployed servers. Generated Workers answer CORS so it (and other browser clients) can reach
-  them; for Node servers, add the page's origin to `MCP_ALLOWED_ORIGINS`.
+  and connects to any remote MCP server with nothing to install: custom headers, OAuth sign-in
+  (discovery, Client ID Metadata Documents or dynamic registration, PKCE) and an optional
+  [open-source relay](relay/README.md) for servers that block browser requests. Generated Workers
+  answer CORS so it (and other browser clients) can reach them directly; for Node servers, add the
+  page's origin to `MCP_ALLOWED_ORIGINS`.
 - Set `MCP_PLAYGROUND=off` (Node) or the `MCP_PLAYGROUND` var to `"off"` (Worker) to stop serving it,
   for example in production.
 - stdio servers have no HTTP endpoint; test them with the
