@@ -1003,8 +1003,8 @@ describe('opt-in security/execution options', () => {
     expect(inBody).toContain("formData.append('client_id', clientId)");
     expect(inBody).toContain("formData.append('client_secret', clientSecret)");
     const header = generateOAuth2TokenAcquisitionCode({});
-    expect(header).toContain("'Authorization': `Basic");
-    expect(header).not.toContain("formData.append('client_id'");
+    expect(header).toContain("tokenRequestHeaders['Authorization'] = `Basic");
+    expect(header).not.toContain("formData.append('client_secret'");
   });
 
   it('#9 custom-auth wires the hook import and call', () => {
@@ -1479,7 +1479,7 @@ describe('generated OAuth2 docs', () => {
     expect(docs).not.toContain('## Token Caching');
   });
 
-  it('documents only OAUTH_TOKEN for password-only schemes', () => {
+  it('documents the password-grant variables for password-only schemes', () => {
     const docs = generateOAuth2Docs({
       legacy: {
         type: 'oauth2',
@@ -1487,9 +1487,30 @@ describe('generated OAuth2 docs', () => {
       },
     });
     expect(docs).toContain('`OAUTH_TOKEN_LEGACY`');
-    expect(docs).not.toContain('OAUTH_CLIENT_ID_LEGACY');
+    expect(docs).toContain('`OAUTH_USERNAME_LEGACY`');
+    expect(docs).toContain('`OAUTH_PASSWORD_LEGACY`');
     expect(docs).toContain('**Password Flow:**');
-    expect(docs).not.toContain('## Token Caching');
+    expect(docs).toContain('## Token Caching');
+  });
+
+  it('lists password-grant variables only for schemes that use the password grant', () => {
+    for (const docs of [
+      generateOAuth2Docs(clientCredentials),
+      generateOAuth2Docs(implicitOnly),
+      // A client credentials flow wins over a password flow on the same scheme.
+      generateOAuth2Docs({
+        both: {
+          type: 'oauth2',
+          flows: {
+            clientCredentials: { tokenUrl: 'https://example.com/token', scopes: {} },
+            password: { tokenUrl: 'https://example.com/token', scopes: {} },
+          },
+        },
+      }),
+    ]) {
+      expect(docs).not.toContain('OAUTH_USERNAME_');
+      expect(docs).not.toContain('OAUTH_PASSWORD_');
+    }
   });
 
   it('documents client credentials and token caching when the server can fetch tokens', () => {

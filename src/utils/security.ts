@@ -21,6 +21,8 @@ export function getEnvVarName(
     | 'OAUTH_CLIENT_SECRET'
     | 'OAUTH_TOKEN'
     | 'OAUTH_SCOPES'
+    | 'OAUTH_USERNAME'
+    | 'OAUTH_PASSWORD'
     | 'OPENID_TOKEN'
 ): string {
   const sanitizedName = schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
@@ -109,17 +111,14 @@ export function generateOAuth2TokenAcquisitionCode(options: SecurityCodeOptions 
   const env = (prefix: string) =>
     `process.env[\`${prefix}_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`]`;
 
-  // Token request: credentials in body (issue #8) or Basic header (default).
-  const bodyCreds = options.oauthCredsInBody
+  // Confidential client authentication: credentials in body (issue #8) or Basic header (default).
+  const clientAuth = options.oauthCredsInBody
     ? `
-        // Send client credentials in the request body
-        formData.append('client_id', clientId);
-        formData.append('client_secret', clientSecret);`
-    : '';
-  const tokenRequestHeaders = options.oauthCredsInBody
-    ? `'Content-Type': 'application/x-www-form-urlencoded'`
-    : `'Content-Type': 'application/x-www-form-urlencoded',
-                'Authorization': \`Basic \${Buffer.from(\`\${clientId}:\${clientSecret}\`).toString('base64')}\``;
+            // Send client credentials in the request body
+            formData.append('client_id', clientId);
+            formData.append('client_secret', clientSecret);`
+    : `
+            tokenRequestHeaders['Authorization'] = \`Basic \${Buffer.from(\`\${clientId}:\${clientSecret}\`).toString('base64')}\`;`;
 
   // Insecure HTTPS agent (issue #46).
   const insecureAgent = options.insecure
@@ -144,7 +143,8 @@ declare global {
 }
 
 /**
- * Acquires an OAuth2 token using client credentials flow
+ * Acquires an OAuth2 token with the client credentials grant, or with the resource
+ * owner password grant for schemes that declare only a password flow
  * 
  * @param schemeName Name of the security scheme
  * @param scheme OAuth2 security scheme
@@ -161,7 +161,18 @@ async function acquireOAuth2Token(schemeName: string, scheme: any, requiredScope
         // operation's security requirement declares (issue #81).
         const scopes = configuredScopes || (requiredScopes.length > 0 ? requiredScopes.join(' ') : '');
 
-        if (!clientId || !clientSecret) {
+        // A client credentials flow wins; otherwise a password flow requests a token
+        // with the resource owner's username and password.
+        const usePasswordGrant = !scheme.flows?.clientCredentials && Boolean(scheme.flows?.password);
+        const username = usePasswordGrant ? ${env('OAUTH_USERNAME')} : undefined;
+        const password = usePasswordGrant ? ${env('OAUTH_PASSWORD')} : undefined;
+
+        if (usePasswordGrant) {
+            if (!username || !password) {
+                console.error(\`Missing username or password for OAuth2 scheme '\${schemeName}'\`);
+                return null;
+            }
+        } else if (!clientId || !clientSecret) {
             console.error(\`Missing client credentials for OAuth2 scheme '\${schemeName}'\`);
             return null;
         }
@@ -173,7 +184,9 @@ async function acquireOAuth2Token(schemeName: string, scheme: any, requiredScope
         
         // Check if we have a cached token
         // Cache per scope set so a narrower token is never reused for a wider requirement.
-        const cacheKey = \`\${schemeName}_\${clientId}_\${scopes}\`;
+        const cacheKey = usePasswordGrant
+            ? \`\${schemeName}_password_\${username}_\${clientId ?? ''}_\${scopes}\`
+            : \`\${schemeName}_\${clientId}_\${scopes}\`;
         const cachedToken = global.__oauthTokenCache[cacheKey];
         const now = Date.now();
         
@@ -184,25 +197,42 @@ async function acquireOAuth2Token(schemeName: string, scheme: any, requiredScope
         
         // Determine token URL based on flow type
         let tokenUrl = '';
-        if (scheme.flows?.clientCredentials?.tokenUrl) {
-            tokenUrl = scheme.flows.clientCredentials.tokenUrl;
-            console.error(\`Using client credentials flow for '\${schemeName}'\`);
-        } else if (scheme.flows?.password?.tokenUrl) {
-            tokenUrl = scheme.flows.password.tokenUrl;
+        if (usePasswordGrant) {
+            tokenUrl = scheme.flows.password.tokenUrl ?? '';
             console.error(\`Using password flow for '\${schemeName}'\`);
-        } else {
+        } else if (scheme.flows?.clientCredentials?.tokenUrl || scheme.flows?.password?.tokenUrl) {
+            tokenUrl = scheme.flows?.clientCredentials?.tokenUrl || scheme.flows?.password?.tokenUrl;
+            console.error(\`Using client credentials flow for '\${schemeName}'\`);
+        }
+        if (!tokenUrl) {
             console.error(\`No supported OAuth2 flow found for '\${schemeName}'\`);
             return null;
         }
         
         // Prepare the token request
-        let formData = new URLSearchParams();
-        formData.append('grant_type', 'client_credentials');
+        const formData = new URLSearchParams();
+        const tokenRequestHeaders: Record<string, string> = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        };
+        if (usePasswordGrant) {
+            formData.append('grant_type', 'password');
+            formData.append('username', username as string);
+            formData.append('password', password as string);
+        } else {
+            formData.append('grant_type', 'client_credentials');
+        }
         
         // Add scopes if specified
         if (scopes) {
             formData.append('scope', scopes);
-        }${bodyCreds}
+        }
+
+        if (clientId && clientSecret) {
+            // Confidential client${clientAuth}
+        } else if (clientId) {
+            // Public client (password grant): identify the client without a secret
+            formData.append('client_id', clientId);
+        }
 
         console.error(\`Requesting OAuth2 token for '\${schemeName}'\`);
 
@@ -210,9 +240,7 @@ async function acquireOAuth2Token(schemeName: string, scheme: any, requiredScope
         const response = await axios({
             method: 'POST',
             url: tokenUrl,
-            headers: {
-                ${tokenRequestHeaders}
-            },
+            headers: tokenRequestHeaders,
             data: formData.toString()${insecureAgent}
         });
         
@@ -488,7 +516,8 @@ async function resolveSchemeCredential(
         return null;
     }
 
-    // OAuth2: a pre-provided token, or client credentials for automatic acquisition
+    // OAuth2: a pre-provided token, else a token fetched with the client credentials
+    // grant or, for password-only schemes, the resource owner password grant
     if (scheme.type === 'oauth2') {
         let token = getSchemeEnv('OAUTH_TOKEN', schemeName);
         if (!token && (scheme.flows?.clientCredentials || scheme.flows?.password)) {
@@ -599,9 +628,11 @@ function credentialHint(schemeName: string, scheme: any, passthroughNames: strin
     } else if (scheme.type === 'http' && String(scheme.scheme ?? '').toLowerCase() === 'basic') {
         hint = \`BASIC_USERNAME_\${suffix} (and BASIC_PASSWORD_\${suffix})\`;
     } else if (scheme.type === 'oauth2') {
-        hint = scheme.flows?.clientCredentials || scheme.flows?.password
+        hint = scheme.flows?.clientCredentials
             ? \`OAUTH_TOKEN_\${suffix} (or OAUTH_CLIENT_ID_\${suffix} and OAUTH_CLIENT_SECRET_\${suffix})\`
-            : \`OAUTH_TOKEN_\${suffix}\`;
+            : scheme.flows?.password
+              ? \`OAUTH_TOKEN_\${suffix} (or OAUTH_USERNAME_\${suffix} and OAUTH_PASSWORD_\${suffix})\`
+              : \`OAUTH_TOKEN_\${suffix}\`;
     } else if (scheme.type === 'openIdConnect') {
         hint = \`OPENID_TOKEN_\${suffix}\`;
     } else {
@@ -901,11 +932,18 @@ export function getSecuritySchemesDocs(
     } else if (scheme.type === 'oauth2') {
       const flowTypes = scheme.flows ? Object.keys(scheme.flows) : ['unknown'];
 
-      // Add client credentials for OAuth2
+      // Client credentials (and, for password-only schemes, the resource owner's login)
       const clientIdVar = getEnvVarName(name, 'OAUTH_CLIENT_ID');
       const clientSecretVar = getEnvVarName(name, 'OAUTH_CLIENT_SECRET');
-      docs += `- \`${clientIdVar}\`: Client ID for OAuth2 authentication (${flowTypes.join(', ')} flow)\n`;
-      docs += `- \`${clientSecretVar}\`: Client secret for OAuth2 authentication\n`;
+      if (scheme.flows?.clientCredentials) {
+        docs += `- \`${clientIdVar}\`: Client ID for OAuth2 authentication (${flowTypes.join(', ')} flow)\n`;
+        docs += `- \`${clientSecretVar}\`: Client secret for OAuth2 authentication\n`;
+      } else if (scheme.flows?.password) {
+        docs += `- \`${getEnvVarName(name, 'OAUTH_USERNAME')}\`: Username for the OAuth2 password grant\n`;
+        docs += `- \`${getEnvVarName(name, 'OAUTH_PASSWORD')}\`: Password for the OAuth2 password grant\n`;
+        docs += `- \`${clientIdVar}\`: Client ID, if the token endpoint requires one (optional)\n`;
+        docs += `- \`${clientSecretVar}\`: Client secret for a confidential client (optional)\n`;
+      }
 
       // Add OAuth token for manual setting
       const tokenVar = getEnvVarName(name, 'OAUTH_TOKEN');

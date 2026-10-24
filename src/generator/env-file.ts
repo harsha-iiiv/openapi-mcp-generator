@@ -68,9 +68,19 @@ LOG_LEVEL=info
           content += `# ${passwordVar}=your_password_here\n`;
         }
       } else if (scheme.type === 'oauth2') {
-        content += `# OAuth2 authentication (${scheme.flows ? Object.keys(scheme.flows).join(', ') : 'unknown'} flow)\n`;
-        const varName = `OAUTH_TOKEN_${name.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}`;
-        content += `# ${varName}=your_oauth_token_here\n`;
+        content += `# OAuth2 authentication (${scheme.flows ? Object.keys(scheme.flows).join(', ') : 'unknown'} flow): a token you already have works for every flow\n`;
+        content += `# ${getEnvVarName(name, 'OAUTH_TOKEN')}=your_oauth_token_here\n`;
+        if (scheme.flows?.clientCredentials) {
+          content += `# Or let the server fetch a token with the client credentials grant:\n`;
+          content += `# ${getEnvVarName(name, 'OAUTH_CLIENT_ID')}=your_client_id_here\n`;
+          content += `# ${getEnvVarName(name, 'OAUTH_CLIENT_SECRET')}=your_client_secret_here\n`;
+        } else if (scheme.flows?.password) {
+          content += `# Or let the server fetch a token with the password grant (client ID optional, secret only for a confidential client):\n`;
+          content += `# ${getEnvVarName(name, 'OAUTH_USERNAME')}=your_username_here\n`;
+          content += `# ${getEnvVarName(name, 'OAUTH_PASSWORD')}=your_password_here\n`;
+          content += `# ${getEnvVarName(name, 'OAUTH_CLIENT_ID')}=your_client_id_here\n`;
+          content += `# ${getEnvVarName(name, 'OAUTH_CLIENT_SECRET')}=your_client_secret_here\n`;
+        }
       } else if (scheme.type === 'openIdConnect') {
         content += `# ${getEnvVarName(name, 'OPENID_TOKEN')}=your_openid_token_here\n`;
       }

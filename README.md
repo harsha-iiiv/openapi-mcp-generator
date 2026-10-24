@@ -330,13 +330,19 @@ Local development: `cp .dev.vars.example .dev.vars`, uncomment and fill in the s
 
 Configure auth credentials in your environment:
 
-| Auth Type  | Variable Format                                                                                    |
-| ---------- | -------------------------------------------------------------------------------------------------- |
-| API Key    | `API_KEY_<SCHEME_NAME>`                                                                            |
-| Bearer     | `BEARER_TOKEN_<SCHEME_NAME>`                                                                       |
-| Basic Auth | `BASIC_USERNAME_<SCHEME_NAME>`, `BASIC_PASSWORD_<SCHEME_NAME>`                                     |
-| OAuth2     | `OAUTH_CLIENT_ID_<SCHEME_NAME>`, `OAUTH_CLIENT_SECRET_<SCHEME_NAME>`, `OAUTH_SCOPES_<SCHEME_NAME>` |
-| OpenID     | `OPENID_TOKEN_<SCHEME_NAME>`                                                                       |
+| Auth Type  | Variable Format                                                                                                                    |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| API Key    | `API_KEY_<SCHEME_NAME>`                                                                                                            |
+| Bearer     | `BEARER_TOKEN_<SCHEME_NAME>`                                                                                                       |
+| Basic Auth | `BASIC_USERNAME_<SCHEME_NAME>`, `BASIC_PASSWORD_<SCHEME_NAME>`                                                                     |
+| OAuth2     | `OAUTH_TOKEN_<SCHEME_NAME>`, or `OAUTH_CLIENT_ID_<SCHEME_NAME>`, `OAUTH_CLIENT_SECRET_<SCHEME_NAME>`, `OAUTH_SCOPES_<SCHEME_NAME>` |
+| OpenID     | `OPENID_TOKEN_<SCHEME_NAME>`                                                                                                       |
+
+For OAuth2, `OAUTH_TOKEN_<SCHEME_NAME>` is a token you already have and works for every flow.
+Otherwise the server fetches a token: with the client ID and secret when the scheme has a client
+credentials flow or, when it has only a password flow, with `OAUTH_USERNAME_<SCHEME_NAME>` and
+`OAUTH_PASSWORD_<SCHEME_NAME>` (plus the client ID, and the secret for a confidential client, when
+the token endpoint needs them).
 
 When an operation lists several security requirements, the first one whose schemes are all
 configured is used. If none can be satisfied (a forwarded `--header-passthrough` header counts)
