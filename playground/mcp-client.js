@@ -186,12 +186,11 @@ export function validateHeaders(headers = {}) {
 
 /** The environment-variable placeholder used for a header in curl commands. */
 export function headerEnvName(name) {
-  return (
-    String(name)
-      .toUpperCase()
-      .replace(/[^A-Z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '') || 'HEADER'
-  );
+  const parts = String(name)
+    .toUpperCase()
+    .split(/[^A-Z0-9]/)
+    .filter(Boolean);
+  return parts.join('_') || 'HEADER';
 }
 
 /**

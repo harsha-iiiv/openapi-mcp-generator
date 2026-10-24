@@ -228,10 +228,17 @@ export function checkTarget(raw: string | null): URL | string {
 
 // --- helpers ---------------------------------------------------------------------------
 
+/** Removes trailing slashes in linear time (a regex like /\/+$/ is quadratic on long runs). */
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+}
+
 export function parseAllowedOrigins(value: string | undefined): string[] {
   return String(value ?? DEFAULT_ALLOWED_ORIGINS)
     .split(/[\s,]+/)
-    .map((o) => o.trim().replace(/\/+$/, ''))
+    .map((o) => trimTrailingSlashes(o.trim()))
     .filter(Boolean);
 }
 
@@ -306,7 +313,7 @@ export function createRelay(options: RelayOptions = {}): Relay {
       const started = Date.now();
       const url = new URL(request.url);
       const allowed = parseAllowedOrigins(env.ALLOWED_ORIGINS);
-      const origin = (request.headers.get('origin') ?? '').replace(/\/+$/, '');
+      const origin = trimTrailingSlashes(request.headers.get('origin') ?? '');
       const target = request.headers.get(TARGET_HEADER);
 
       if (url.pathname !== '/') return json(404, 'Not found.');

@@ -33,6 +33,14 @@ export class OAuthError extends Error {
 
 // --- small helpers -------------------------------------------------------------------
 
+/** Removes trailing slashes in linear time (a regex like /\/+$/ is quadratic on long runs). */
+function trimTrailingSlashes(value) {
+  const text = String(value || '');
+  let end = text.length;
+  while (end > 0 && text.charCodeAt(end - 1) === 47) end--;
+  return text.slice(0, end);
+}
+
 function base64url(bytes) {
   let binary = '';
   for (const b of bytes) binary += String.fromCharCode(b);
@@ -82,7 +90,7 @@ export function resourceCovers(resource, serverUrl) {
 /** Well-known protected resource metadata URLs, in the order the spec requires. */
 export function protectedResourceUrls(serverUrl) {
   const u = new URL(serverUrl);
-  const path = u.pathname.replace(/\/+$/, '');
+  const path = trimTrailingSlashes(u.pathname);
   const urls = [];
   if (path) urls.push(`${u.origin}/.well-known/oauth-protected-resource${path}`);
   urls.push(`${u.origin}/.well-known/oauth-protected-resource`);
@@ -92,7 +100,7 @@ export function protectedResourceUrls(serverUrl) {
 /** Authorization server metadata URLs for an issuer, in the order the spec requires. */
 export function authorizationServerUrls(issuer) {
   const u = new URL(issuer);
-  const path = u.pathname.replace(/\/+$/, '');
+  const path = trimTrailingSlashes(u.pathname);
   if (path) {
     return [
       `${u.origin}/.well-known/oauth-authorization-server${path}`,
@@ -350,7 +358,7 @@ export class OAuthClient {
     const found = await this.firstJson(authorizationServerUrls(issuer), (m) =>
       Boolean(m.authorization_endpoint && m.token_endpoint)
     );
-    const strip = (v) => String(v || '').replace(/\/+$/, '');
+    const strip = trimTrailingSlashes;
     if (found?.metadata.issuer && strip(found.metadata.issuer) !== strip(issuer)) {
       throw new OAuthError(
         `The authorization server says it is ${found.metadata.issuer}, not ${issuer}. Refusing to sign in.`
@@ -503,8 +511,8 @@ export class OAuthClient {
     if (
       plan.authorizationServer.authorization_response_iss_parameter_supported &&
       callback.iss &&
-      callback.iss.replace(/\/+$/, '') !==
-        String(plan.authorizationServer.issuer || plan.issuer).replace(/\/+$/, '')
+      trimTrailingSlashes(callback.iss) !==
+        trimTrailingSlashes(plan.authorizationServer.issuer || plan.issuer)
     ) {
       throw new OAuthError('The sign-in response came from a different authorization server.');
     }
