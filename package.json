@@ -15,6 +15,7 @@
   "files": [
     "dist",
     "bin",
+    "playground",
     "README.md",
     "LICENSE"
   ],
