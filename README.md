@@ -40,7 +40,7 @@ npm install -g openapi-mcp-generator
 5.0 generates servers on the MCP TypeScript SDK v2 and supports MCP 2026-07-28 alongside 2025-era clients. Generated projects change, so upgrade deliberately:
 
 1. Commit your generated project, then regenerate with the same flags: `npx openapi-mcp-generator@5 -i ./openapi.json -o ./my-mcp --force`. `--force` overwrites generated files, including your edits.
-2. Use Node.js 22 or later, then run `npm install`. `@modelcontextprotocol/sdk` is replaced by `@modelcontextprotocol/server` (`^2.4.0`), and `zod`, `json-schema-to-zod`, `dotenv` and `uuid` by `@cfworker/json-schema`.
+2. Use Node.js 22.19 or later to run the generator (generated projects need Node.js 22 or later), then run `npm install`. `@modelcontextprotocol/sdk` is replaced by `@modelcontextprotocol/server` (`^2.4.0`), and `zod`, `json-schema-to-zod`, `dotenv` and `uuid` by `@cfworker/json-schema`.
 3. Update customized code to import from `@modelcontextprotocol/server` (stdio helpers from `@modelcontextprotocol/server/stdio`).
 4. Streamable HTTP and Worker servers are stateless: no `mcp-session-id`, and `GET` and `DELETE` on `/mcp` return `405`. Tool calls over `POST` are unaffected.
 5. Missing upstream credentials now fail closed with an error naming the variables to set; `MCP_ALLOW_MISSING_CREDENTIALS=true` restores the old behavior.
