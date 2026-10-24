@@ -31,6 +31,7 @@
         <span id="status" class="status" data-state="idle" role="status" aria-live="polite"
           ><i aria-hidden="true"></i><span id="status-text">Not connected</span></span
         >
+        <button id="btn-share" class="btn ghost small" type="button" hidden>Copy link</button>
         <button id="btn-clients" class="btn ghost small" type="button" hidden>
           Connect a client
         </button>
@@ -43,7 +44,7 @@
         <div class="connect-card">
           <p class="eyebrow">MCP playground</p>
           <h1 id="connect-title">Try every tool before you wire up a client.</h1>
-          <p class="lede">
+          <p class="lede" id="connect-lede">
             Lists the server's tools, builds a form from each input schema and shows exactly what
             goes over the wire. Requests go straight from this browser to the server.
           </p>
@@ -56,12 +57,16 @@
                 inputmode="url"
                 spellcheck="false"
                 autocomplete="url"
-                placeholder="https://your-server.example.workers.dev/mcp"
+                placeholder="https://mcp.example.com/mcp"
               />
+              <div class="examples" id="examples" hidden>
+                <span class="examples-label">Try</span>
+              </div>
             </div>
             <div class="field" id="transport-field" hidden>
               <label for="transport">Transport</label>
               <select id="transport">
+                <option value="auto">Auto-detect</option>
                 <option value="streamable-http">Streamable HTTP</option>
                 <option value="sse">HTTP+SSE (legacy)</option>
               </select>
@@ -71,6 +76,23 @@
               <code id="endpoint"></code>
               <span id="transport-name" class="chip"></span>
             </div>
+
+            <fieldset class="field auth" id="auth-field" hidden>
+              <legend>Authentication</legend>
+              <div class="segmented" role="radiogroup" aria-label="Authentication">
+                <label
+                  ><input type="radio" name="auth" value="none" checked /><span>None</span></label
+                >
+                <label
+                  ><input type="radio" name="auth" value="bearer" /><span>Bearer token</span></label
+                >
+                <label
+                  ><input type="radio" name="auth" value="headers" /><span>Headers</span></label
+                >
+                <label><input type="radio" name="auth" value="oauth" /><span>OAuth</span></label>
+              </div>
+            </fieldset>
+
             <div class="field" id="token-field">
               <label for="token"
                 >Bearer token <span class="hint" id="token-hint">optional</span></label
@@ -87,16 +109,68 @@
                   Show
                 </button>
               </div>
-              <label class="check"
-                ><input type="checkbox" id="remember" /> Remember in this tab</label
-              >
             </div>
+
+            <div class="field" id="headers-field" hidden>
+              <span class="field-label" id="headers-label"
+                >Request headers <span class="hint">sent with every request</span></span
+              >
+              <div id="header-rows" class="header-rows" aria-labelledby="headers-label"></div>
+              <div>
+                <button type="button" id="btn-add-header" class="btn ghost small">
+                  Add header
+                </button>
+              </div>
+            </div>
+
+            <div class="field oauth-panel" id="oauth-field" hidden>
+              <p class="oauth-status" id="oauth-status">
+                Sign in with the server's own login. The playground registers itself, uses PKCE and
+                keeps the token in this tab only.
+              </p>
+              <div class="actions">
+                <button type="button" id="btn-signin" class="btn ghost small">Sign in</button>
+                <button type="button" id="btn-signout" class="btn ghost small" hidden>
+                  Sign out
+                </button>
+              </div>
+              <details class="advanced" id="oauth-advanced">
+                <summary>Client ID</summary>
+                <label for="client-id" class="sub-label"
+                  >Pre-registered client ID
+                  <span class="hint">only if the server needs one</span></label
+                >
+                <input id="client-id" type="text" autocomplete="off" spellcheck="false" />
+                <p class="fine-inline">
+                  Register the redirect URI <code id="redirect-uri"></code> with the provider.
+                </p>
+              </details>
+            </div>
+
+            <label class="check" id="remember-row"
+              ><input type="checkbox" id="remember" /> Remember credentials in this tab</label
+            >
+
+            <div class="field relay" id="relay-field" hidden>
+              <label class="check strong"
+                ><input type="checkbox" id="use-relay" /> Route through relay</label
+              >
+              <p class="fine-inline" id="relay-note">
+                For servers that block browser requests. Requests, including tokens and headers,
+                pass through the open-source relay at <code id="relay-host"></code>, which forwards
+                them and does not store them.
+              </p>
+            </div>
+
             <div class="actions">
               <button id="btn-connect" class="btn primary" type="submit">Connect</button>
             </div>
-            <p id="connect-error" class="alert" role="alert" hidden></p>
+            <div id="connect-error" class="alert" role="alert" hidden>
+              <p id="connect-error-text"></p>
+              <div class="alert-actions" id="connect-error-actions"></div>
+            </div>
           </form>
-          <p class="fine">
+          <p class="fine" id="connect-fine">
             Open source, part of
             <a
               href="https://github.com/harsha-iiiv/openapi-mcp-generator"
@@ -110,97 +184,251 @@
       </section>
 
       <section id="workspace" class="workspace" hidden>
-        <aside class="sidebar" aria-label="Tools">
-          <div class="search">
-            <input
-              id="search"
-              type="search"
-              placeholder="Search tools"
-              aria-label="Search tools"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <kbd aria-hidden="true">/</kbd>
+        <nav class="views" role="tablist" aria-label="Server features" id="views">
+          <button role="tab" type="button" id="vt-tools" data-view="tools" aria-selected="true">
+            Tools <span class="n" id="n-tools"></span>
+          </button>
+          <button
+            role="tab"
+            type="button"
+            id="vt-resources"
+            data-view="resources"
+            aria-selected="false"
+          >
+            Resources <span class="n" id="n-resources"></span>
+          </button>
+          <button
+            role="tab"
+            type="button"
+            id="vt-prompts"
+            data-view="prompts"
+            aria-selected="false"
+          >
+            Prompts <span class="n" id="n-prompts"></span>
+          </button>
+          <button role="tab" type="button" id="vt-logs" data-view="logs" aria-selected="false">
+            Logs <span class="n" id="n-logs"></span>
+          </button>
+          <button role="tab" type="button" id="vt-raw" data-view="raw" aria-selected="false">
+            Raw
+          </button>
+        </nav>
+
+        <div class="view split" id="view-tools" role="tabpanel" aria-labelledby="vt-tools">
+          <aside class="sidebar" aria-label="Tools">
+            <div class="search">
+              <input
+                id="search"
+                type="search"
+                placeholder="Search tools"
+                aria-label="Search tools"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <kbd aria-hidden="true">/</kbd>
+            </div>
+            <p id="tool-count" class="count"></p>
+            <div
+              id="tool-list"
+              class="tool-list"
+              role="listbox"
+              aria-label="Tools"
+              tabindex="0"
+            ></div>
+          </aside>
+          <section class="detail">
+            <div id="empty" class="empty"><p>Pick a tool on the left.</p></div>
+            <article id="tool" class="tool" hidden>
+              <header class="tool-head">
+                <div class="tool-title">
+                  <h2 id="tool-name"></h2>
+                  <div id="tool-tags" class="tags"></div>
+                </div>
+                <div class="tool-actions">
+                  <button id="btn-raw" class="btn ghost small" type="button" aria-pressed="false">
+                    Edit as JSON
+                  </button>
+                  <button id="btn-curl" class="btn ghost small" type="button">Copy as curl</button>
+                </div>
+              </header>
+              <p id="tool-desc" class="desc"></p>
+              <form id="tool-form" class="tool-form" novalidate>
+                <div id="fields" class="fields"></div>
+                <div id="raw" class="raw" hidden>
+                  <label for="raw-args">Arguments (JSON object)</label>
+                  <textarea id="raw-args" spellcheck="false" rows="12"></textarea>
+                </div>
+                <div class="run">
+                  <button id="btn-run" class="btn primary" type="submit">Run tool</button>
+                  <button id="btn-cancel" class="btn ghost" type="button" hidden>Cancel</button>
+                  <span class="kbd-hint" id="kbd-hint"></span>
+                  <span id="form-error" class="form-error" role="alert"></span>
+                </div>
+              </form>
+              <section id="result" class="result" hidden aria-label="Result">
+                <div class="progress" aria-hidden="true"></div>
+                <div class="progress-bar" id="progress-bar" hidden>
+                  <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <header class="result-head">
+                  <span id="result-status" class="result-status"></span>
+                  <div class="tabs" role="tablist" aria-label="Result view">
+                    <button
+                      role="tab"
+                      id="tab-output"
+                      aria-selected="true"
+                      data-tab="output"
+                      type="button"
+                    >
+                      Output
+                    </button>
+                    <button
+                      role="tab"
+                      id="tab-rpc"
+                      aria-selected="false"
+                      data-tab="rpc"
+                      type="button"
+                    >
+                      JSON-RPC
+                    </button>
+                  </div>
+                  <button id="btn-copy-result" class="btn ghost small" type="button">Copy</button>
+                </header>
+                <div
+                  id="result-output"
+                  class="result-body"
+                  role="tabpanel"
+                  aria-labelledby="tab-output"
+                ></div>
+                <div
+                  id="result-rpc"
+                  class="result-body"
+                  role="tabpanel"
+                  aria-labelledby="tab-rpc"
+                  hidden
+                ></div>
+              </section>
+            </article>
+          </section>
+        </div>
+
+        <div
+          class="view split"
+          id="view-resources"
+          role="tabpanel"
+          aria-labelledby="vt-resources"
+          hidden
+        >
+          <aside class="sidebar" aria-label="Resources">
+            <p id="resource-count" class="count count-top"></p>
+            <div
+              id="resource-list"
+              class="tool-list"
+              role="listbox"
+              aria-label="Resources"
+              tabindex="0"
+            ></div>
+          </aside>
+          <section class="detail" id="resource-detail">
+            <div class="empty"><p>Pick a resource or template on the left.</p></div>
+          </section>
+        </div>
+
+        <div
+          class="view split"
+          id="view-prompts"
+          role="tabpanel"
+          aria-labelledby="vt-prompts"
+          hidden
+        >
+          <aside class="sidebar" aria-label="Prompts">
+            <p id="prompt-count" class="count count-top"></p>
+            <div
+              id="prompt-list"
+              class="tool-list"
+              role="listbox"
+              aria-label="Prompts"
+              tabindex="0"
+            ></div>
+          </aside>
+          <section class="detail" id="prompt-detail">
+            <div class="empty"><p>Pick a prompt on the left.</p></div>
+          </section>
+        </div>
+
+        <div class="view" id="view-logs" role="tabpanel" aria-labelledby="vt-logs" hidden>
+          <div class="pane">
+            <div class="pane-head">
+              <label class="inline-field" for="log-level"
+                >Server log level
+                <select id="log-level">
+                  <option value="">(server default)</option>
+                  <option value="debug">debug</option>
+                  <option value="info">info</option>
+                  <option value="notice">notice</option>
+                  <option value="warning">warning</option>
+                  <option value="error">error</option>
+                  <option value="critical">critical</option>
+                  <option value="alert">alert</option>
+                  <option value="emergency">emergency</option>
+                </select>
+              </label>
+              <label class="check"
+                ><input type="checkbox" id="log-events" checked /> Show events</label
+              >
+              <span class="spacer"></span>
+              <button id="btn-clear-logs" class="btn ghost small" type="button">Clear</button>
+            </div>
+            <p id="log-note" class="pane-note"></p>
+            <ol id="log-list" class="log-list" aria-live="polite"></ol>
           </div>
-          <p id="tool-count" class="count"></p>
-          <div
-            id="tool-list"
-            class="tool-list"
-            role="listbox"
-            aria-label="Tools"
-            tabindex="0"
-          ></div>
-        </aside>
-        <section class="detail">
-          <div id="empty" class="empty"><p>Pick a tool on the left.</p></div>
-          <article id="tool" class="tool" hidden>
-            <header class="tool-head">
-              <div class="tool-title">
-                <h2 id="tool-name"></h2>
-                <div id="tool-tags" class="tags"></div>
+        </div>
+
+        <div class="view" id="view-raw" role="tabpanel" aria-labelledby="vt-raw" hidden>
+          <div class="pane raw-pane">
+            <form id="raw-form" class="raw-form" novalidate>
+              <div class="field">
+                <label for="raw-method">Method</label>
+                <input
+                  id="raw-method"
+                  type="text"
+                  list="raw-methods"
+                  spellcheck="false"
+                  autocomplete="off"
+                  value="ping"
+                />
+                <datalist id="raw-methods"></datalist>
               </div>
-              <div class="tool-actions">
-                <button id="btn-raw" class="btn ghost small" type="button" aria-pressed="false">
-                  Edit as JSON
-                </button>
-                <button id="btn-curl" class="btn ghost small" type="button">Copy as curl</button>
-              </div>
-            </header>
-            <p id="tool-desc" class="desc"></p>
-            <form id="tool-form" class="tool-form" novalidate>
-              <div id="fields" class="fields"></div>
-              <div id="raw" class="raw" hidden>
-                <label for="raw-args">Arguments (JSON object)</label>
-                <textarea id="raw-args" spellcheck="false" rows="12"></textarea>
+              <div class="field">
+                <label for="raw-params">Params (JSON)</label>
+                <textarea id="raw-params" rows="8" spellcheck="false">{}</textarea>
               </div>
               <div class="run">
-                <button id="btn-run" class="btn primary" type="submit">Run tool</button>
-                <span class="kbd-hint" id="kbd-hint"></span>
-                <span id="form-error" class="form-error" role="alert"></span>
+                <button class="btn primary" type="submit" id="btn-raw-send">Send request</button>
+                <label class="check"
+                  ><input type="checkbox" id="raw-notify" /> As a notification</label
+                >
+                <button class="btn ghost small" type="button" id="btn-raw-curl">
+                  Copy as curl
+                </button>
+                <span id="raw-error" class="form-error" role="alert"></span>
               </div>
+              <div id="raw-result" class="result-body raw-result" hidden></div>
             </form>
-            <section id="result" class="result" hidden aria-label="Result">
-              <div class="progress" aria-hidden="true"></div>
-              <header class="result-head">
-                <span id="result-status" class="result-status"></span>
-                <div class="tabs" role="tablist" aria-label="Result view">
-                  <button
-                    role="tab"
-                    id="tab-output"
-                    aria-selected="true"
-                    data-tab="output"
-                    type="button"
-                  >
-                    Output
-                  </button>
-                  <button
-                    role="tab"
-                    id="tab-rpc"
-                    aria-selected="false"
-                    data-tab="rpc"
-                    type="button"
-                  >
-                    JSON-RPC
-                  </button>
-                </div>
-                <button id="btn-copy-result" class="btn ghost small" type="button">Copy</button>
-              </header>
-              <div
-                id="result-output"
-                class="result-body"
-                role="tabpanel"
-                aria-labelledby="tab-output"
-              ></div>
-              <div
-                id="result-rpc"
-                class="result-body"
-                role="tabpanel"
-                aria-labelledby="tab-rpc"
-                hidden
-              ></div>
+            <section class="roots" aria-labelledby="roots-title">
+              <h3 id="roots-title">Roots</h3>
+              <p class="pane-note">
+                Folders or files this client offers the server (roots/list). Changes are announced
+                with notifications/roots/list_changed.
+              </p>
+              <div id="root-rows" class="header-rows"></div>
+              <div class="actions">
+                <button type="button" id="btn-add-root" class="btn ghost small">Add root</button>
+                <button type="button" id="btn-save-roots" class="btn ghost small">Apply</button>
+              </div>
             </section>
-          </article>
-        </section>
+          </div>
+        </div>
       </section>
     </main>
 
@@ -219,6 +447,17 @@
         <button id="btn-close-clients" class="btn ghost small" type="button">Close</button>
       </header>
       <div id="client-snippets" class="snippets"></div>
+    </dialog>
+
+    <dialog id="server-request" class="dialog" aria-labelledby="sr-title">
+      <form method="dialog" id="sr-form" novalidate>
+        <header class="dialog-head">
+          <h2 id="sr-title">Request from the server</h2>
+          <span id="sr-queue" class="chip" hidden></span>
+        </header>
+        <div id="sr-body" class="sr-body"></div>
+        <footer class="dialog-foot" id="sr-actions"></footer>
+      </form>
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

@@ -155,9 +155,15 @@ function readJson(storage, key) {
  * origin and for this state (postMessage, with a BroadcastChannel fallback for
  * providers whose pages sever window.opener).
  */
-export function openAuthorizationPopup(url, { state, timeoutMs = 10 * 60 * 1000, signal } = {}) {
+export function openAuthorizationPopup(
+  url,
+  { state, timeoutMs = 10 * 60 * 1000, signal, popup: opened } = {}
+) {
   return new Promise((resolve, reject) => {
-    const popup = globalThis.open(url, 'mcp-oauth', 'popup,width=520,height=720');
+    // A window opened earlier, inside the click handler, is not blocked as a pop-up.
+    let popup = opened && !opened.closed ? opened : null;
+    if (popup) popup.location.href = url;
+    else popup = globalThis.open(url, 'mcp-oauth', 'popup,width=520,height=720');
     if (!popup) {
       reject(
         new OAuthError('The sign-in window was blocked. Allow pop-ups for this site and retry.')
@@ -487,10 +493,10 @@ export class OAuthClient {
   }
 
   /** Full sign-in: discovery, client id, popup, token exchange. Resolves with the tokens. */
-  async signIn(challenge, { signal } = {}) {
+  async signIn(challenge, { signal, popup } = {}) {
     const plan = await this.discover(challenge ?? this.discovery?.challenge);
     const auth = await this.prepareAuthorization(plan);
-    const callback = await this.openAuthorization(auth.url, { state: auth.state, signal });
+    const callback = await this.openAuthorization(auth.url, { state: auth.state, signal, popup });
     if (!callback || callback.state !== auth.state) {
       throw new OAuthError('The sign-in response did not match this request (state mismatch).');
     }
@@ -648,6 +654,21 @@ function oauthErrorText(text) {
     return body.error_description ? `${body.error}: ${body.error_description}` : body.error;
   }
   return String(text || '').slice(0, 200) || 'no details';
+}
+
+/** Opens an empty sign-in window synchronously (call it inside a click handler). */
+export function openBlankPopup() {
+  const popup = globalThis.open('', 'mcp-oauth', 'popup,width=520,height=720');
+  try {
+    if (popup) {
+      popup.document.title = 'Signing in…';
+      popup.document.body.style.font = '14px system-ui, sans-serif';
+      popup.document.body.textContent = 'Finding the sign-in page…';
+    }
+  } catch {
+    // a reused window on another origin
+  }
+  return popup;
 }
 
 /** Re-export for callers that only import this module. */
