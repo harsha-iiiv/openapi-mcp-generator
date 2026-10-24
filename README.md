@@ -13,10 +13,11 @@ This CLI tool automates the generation of MCP-compatible servers that proxy requ
 
 ## ✨ Features
 
-- 🔧 **OpenAPI 3.0 Support**: Converts any OpenAPI 3.0+ spec into an MCP-compatible server.
+- 🔧 **OpenAPI 3.x Support**: Converts any OpenAPI 3.0 or 3.1 spec into an MCP-compatible server (convert Swagger 2.0 first).
 - 🔁 **Proxy Behavior**: Proxies calls to your original REST API while validating request structure and security.
-- 🔐 **Authentication Support**: API keys, Bearer tokens, Basic auth, and OAuth2 supported via environment variables.
-- 🧪 **Zod Validation**: Automatically generates Zod schemas from OpenAPI definitions for runtime input validation.
+- 🔐 **Authentication Support**: API keys, Bearer tokens, Basic auth, and OAuth2 supported via environment variables; calls fail closed when required credentials are missing.
+- 🧪 **JSON Schema Validation**: Arguments are validated against each tool's JSON Schema 2020-12 input schema (no code generation, no `eval`).
+- 🏷️ **Annotations and Structured Output**: Tools carry titles and read-only/destructive/idempotent hints, and JSON object responses come back as `structuredContent` (optionally with a declared `outputSchema`).
 - ⚙️ **Typed Server**: Fully typed, maintainable TypeScript code output.
 - 🔌 **Multiple Transports**: Communicate over stdio, SSE via Hono, or StreamableHTTP.
 - 🧰 **Project Scaffold**: Generates a complete Node.js project with `tsconfig.json`, `package.json`, and entry point.
@@ -39,10 +40,13 @@ npm install -g openapi-mcp-generator
 5.0 generates servers on the MCP TypeScript SDK v2 and supports MCP 2026-07-28 alongside 2025-era clients. Generated projects change, so upgrade deliberately:
 
 1. Commit your generated project, then regenerate with the same flags: `npx openapi-mcp-generator@5 -i ./openapi.json -o ./my-mcp --force`. `--force` overwrites generated files, including your edits.
-2. Run `npm install`. `@modelcontextprotocol/sdk` is replaced by `@modelcontextprotocol/server` (`^2.4.0`).
+2. Use Node.js 22 or later, then run `npm install`. `@modelcontextprotocol/sdk` is replaced by `@modelcontextprotocol/server` (`^2.4.0`), and `zod`, `json-schema-to-zod`, `dotenv` and `uuid` by `@cfworker/json-schema`.
 3. Update customized code to import from `@modelcontextprotocol/server` (stdio helpers from `@modelcontextprotocol/server/stdio`).
 4. Streamable HTTP and Worker servers are stateless: no `mcp-session-id`, and `GET` and `DELETE` on `/mcp` return `405`. Tool calls over `POST` are unaffected.
-5. Credential variables, Worker secret names, `--inbound-auth`, `--header-passthrough` and `MCP_ALLOWED_ORIGINS` are unchanged.
+5. Missing upstream credentials now fail closed with an error naming the variables to set; `MCP_ALLOW_MISSING_CREDENTIALS=true` restores the old behavior.
+6. An unknown tool name is now a JSON-RPC `-32602` error. Integers stay integers, `readOnly` properties leave request inputs, and schema defaults are no longer injected.
+7. Swagger 2.0 specs are refused: convert them with `npx swagger2openapi swagger.json -o openapi.json`.
+8. Credential variables, Worker secret names, `--inbound-auth`, `--header-passthrough` and `MCP_ALLOWED_ORIGINS` are unchanged.
 
 Not ready yet? Stay on 4.x with `npx openapi-mcp-generator@4`. Full notes: [CHANGELOG.md](./CHANGELOG.md).
 
@@ -84,12 +88,22 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 | `--generate-lib`         |       | Generate library-style output: export `main()` instead of auto-invoking it, omitting signal/cleanup wiring.                                    | `false`                           |
 | `--custom-auth`          |       | Generate an editable `src/auth.ts` hook (`applyCustomAuth`) called before built-in auth; return `true` to skip built-in auth.                  | `false`                           |
 | `--oauth-creds-in-body`  |       | Send OAuth2 client credentials in the token request body instead of the Basic `Authorization` header.                                          | `false`                           |
+| `--include-tags`         |       | Comma-separated tags: generate only operations with one of them (case-insensitive).                                                            | _(all)_                           |
+| `--exclude-tags`         |       | Comma-separated tags: skip operations with any of them. Exclusions win over inclusions.                                                        | _(none)_                          |
+| `--include-operations`   |       | Comma-separated operationIds or tool names to generate. Combined with `--include-tags` as a union.                                             | _(all)_                           |
+| `--exclude-operations`   |       | Comma-separated operationIds or tool names to skip. Exclusions win over inclusions.                                                            | _(none)_                          |
+| `--output-schema`        |       | Declare each tool's `outputSchema` from its 2xx JSON response schema (objects only) and reject responses that do not match it.                 | `false`                           |
 | `--force`                |       | Overwrite existing files in the output directory without confirmation                                                                          | `false`                           |
 
 > **Configuring the API base URL at runtime:** the generated server reads
 > `API_BASE_URL` from the environment (`.env`), overriding the value baked in
 > from the OpenAPI `servers` list. The port resolves from `--port`, then the
 > `PORT` env var, then `3000`.
+>
+> **Per-operation and per-path servers:** an operation's `servers[0]` wins over its path item's,
+> which wins over the root server, with server variables set to their defaults. An absolute
+> operation or path server is used even when `API_BASE_URL` is set; a relative one resolves
+> against the active base URL (`"v2"` appends a segment, `"/v2"` replaces the path).
 
 ## 📦 Programmatic API
 
@@ -105,10 +119,15 @@ const tools = await getToolsFromOpenApi('./petstore.json');
 const filteredTools = await getToolsFromOpenApi('https://example.com/api-spec.json', {
   baseUrl: 'https://api.example.com',
   dereference: true,
-  excludeOperationIds: ['deletePet'],
-  filterFn: (tool) => tool.method.toLowerCase() === 'get',
+  includeTags: ['pets'],
+  excludeOperations: ['deletePet'],
+  filterFn: (tool) => tool.annotations?.readOnlyHint === true,
 });
 ```
+
+Each tool definition includes its `name`, `title`, `description`, `inputSchema`, `annotations`,
+HTTP details (`method`, `pathTemplate`, `serverUrl`, `executionParameters`), security
+requirements, tags and, when the operation has a 2xx JSON object response, `outputSchema`.
 
 For full documentation of the programmatic API, see [PROGRAMMATIC_API.md](./PROGRAMMATIC_API.md).
 
@@ -135,10 +154,11 @@ The generated project includes:
 Core dependencies:
 
 - `@modelcontextprotocol/server` - MCP protocol implementation (SDK v2)
+- `@cfworker/json-schema` - JSON Schema 2020-12 validation of tool arguments (and outputs with `--output-schema`)
 - `axios` - HTTP client for API requests
-- `zod` - Runtime validation
-- `json-schema-to-zod` - Convert JSON Schema to Zod
-- Transport-specific deps (Hono, uuid, etc.)
+- Transport-specific deps (`hono`, `@hono/node-server`)
+
+`.env` is loaded with Node's built-in `process.loadEnvFile()`; no `dotenv` dependency.
 
 ---
 
@@ -192,9 +212,9 @@ npx wrangler deploy               # Wrangler logs into YOUR Cloudflare account a
 Highlights:
 
 - Stateless, runs on the free Workers tier (no Durable Objects or KV). A fresh MCP server is created per request.
-- Lean dependencies: just `@modelcontextprotocol/server` and `zod` — no extra agent framework.
+- Lean dependencies: just `@modelcontextprotocol/server` and `@cfworker/json-schema` — no extra agent framework.
 - Non-secret config (e.g. `API_BASE_URL`) lives in `wrangler.jsonc` under `vars`; secrets are set with `wrangler secret put` and read from the `env` binding — never committed.
-- Workers-native runtime: global `fetch` (no Node `https`), and argument validation uses build-time-emitted zod (no runtime `eval`).
+- Workers-native runtime: global `fetch` (no Node `https`), and arguments are validated against the JSON Schema with `@cfworker/json-schema` (no code generation, no `eval`).
 - Auth is scheme-aware: API key (header/query/cookie), HTTP basic/bearer, OpenID Connect tokens, and OAuth2 client-credentials are derived from `env` secrets, following OpenAPI security requirement semantics (see [Securing HTTP servers](#-securing-http-servers)).
 - `--inbound-auth bearer` protects `/mcp` with a token from `wrangler secret put MCP_AUTH_TOKEN`; `--header-passthrough` forwards per-user upstream keys from the client.
 - `--custom-auth`, `--port`, `--insecure`, `--generate-lib`, and `--oauth-creds-in-body` do not apply to this target and are ignored with a warning.
@@ -232,11 +252,52 @@ Configure auth credentials in your environment:
 | OpenID     | `OPENID_TOKEN_<SCHEME_NAME>`                                                                       |
 
 When an operation lists several security requirements, the first one whose schemes are all
-configured is used. OAuth2 tokens are requested with the operation's scopes unless
+configured is used. If none can be satisfied (a forwarded `--header-passthrough` header counts)
+and the operation does not allow anonymous access with an empty `{}` requirement, the tool
+**fails closed**: it does not call the API and returns an error naming what to set, for example
+`Missing credentials for 'getPet': set API_KEY_PETSTORE_AUTH.` Set
+`MCP_ALLOW_MISSING_CREDENTIALS=true` (a Worker var for Workers) to send such requests without
+credentials instead. OAuth2 tokens are requested with the operation's scopes unless
 `OAUTH_SCOPES_<SCHEME_NAME>` overrides them. The Cloudflare Worker target reads the same
 credentials from Wrangler secrets named `<SCHEME_NAME>_API_KEY`, `<SCHEME_NAME>_TOKEN`,
 `<SCHEME_NAME>_USERNAME`/`_PASSWORD` and `<SCHEME_NAME>_CLIENT_ID`/`_CLIENT_SECRET` (see the
 generated `.dev.vars.example`).
+
+---
+
+## 🧩 Generated tools
+
+- **Input schemas** are JSON Schema 2020-12 mapped from your OpenAPI schemas: `integer`, `format`,
+  `pattern`, enums and `allOf`/`anyOf`/`oneOf` are kept, `nullable` becomes a `null` type, `example`
+  becomes `examples`, and `readOnly` properties are left out of request inputs.
+- **Validation:** arguments are checked against that schema before any request is sent. Problems come
+  back as a tool error the model can fix, for example
+  `Invalid arguments for tool 'getPet': /petId: Instance type "string" is invalid. Expected "integer".`
+  Arguments are passed through as given: schema defaults are not injected.
+- **Errors:** invalid arguments, missing credentials and upstream failures are tool errors
+  (`isError: true`); an unknown tool name is a JSON-RPC `-32602` protocol error, as the MCP
+  2026-07-28 specification requires.
+- **Titles and annotations:** the title is the operation's `x-mcp-title`, else its summary. Hints follow
+  the HTTP method: `GET`/`HEAD`/`OPTIONS` are read-only; `POST` is not destructive and not idempotent;
+  `PUT` and `DELETE` are destructive and idempotent; `PATCH` is destructive and not idempotent; all are
+  open-world. Override individual hints per operation:
+
+  ```yaml
+  paths:
+    /pets/{id}:
+      delete:
+        x-mcp-title: Remove a pet
+        x-mcp-annotations:
+          destructiveHint: false # a soft delete
+  ```
+
+- **Structured output:** a JSON response that is an object is also returned as `structuredContent`.
+  With `--output-schema`, each tool declares the schema of its lowest 2xx `application/json` response
+  as `outputSchema` (object schemas only, `writeOnly` properties removed) and every response is
+  validated against it; a response that does not match becomes a tool error that still shows the raw
+  body. Leave it off if your spec does not describe real responses accurately.
+- **Server instructions:** the spec's `info.description` (trimmed, up to 2000 characters) is sent to
+  clients as the server instructions.
 
 ---
 
@@ -310,6 +371,22 @@ paths:
 This uses standard OpenAPI extensions (x-… fields). See the [OpenAPI Extensions guide](https://swagger.io/docs/specification/v3_0/openapi-extensions/) for details.
 
 Note: `x-mcp` must be a boolean or the strings `"true"`/`"false"` (case-insensitive). Other values are ignored in favor of higher-precedence or default behavior.
+
+### Filtering from the command line
+
+Large APIs can be curated without editing the spec:
+
+```bash
+openapi-mcp-generator -i openapi.json -o my-mcp \
+  --include-tags pets,store --exclude-operations deletePet
+```
+
+- `--include-tags` / `--exclude-tags` match operation tags case-insensitively.
+- `--include-operations` / `--exclude-operations` match the operationId or the generated tool name.
+- Filters apply after `x-mcp` and `--default-include`, so they never bring back an excluded
+  operation. Include lists combine (an operation is kept if it matches any), and exclusions always win.
+- The programmatic API accepts the same filters: `includeTags`, `excludeTags`, `includeOperations`,
+  `excludeOperations`.
 
 ---
 
