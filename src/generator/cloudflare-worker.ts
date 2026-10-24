@@ -421,7 +421,8 @@ async function executeApiTool(
     }
 
     // Upstream credentials: OR across requirement objects, AND within one (see upstream-auth.ts).
-    await applyAuth(def.securityRequirements, env, headers, url);
+    // Forwarded client headers count as credentials for the schemes they carry.
+    await applyAuth(def.securityRequirements, env, headers, url, forwardedHeaders);
 
     // Header passthrough (--header-passthrough): this request's client headers
     // override env-based auth for those names. Never shared across requests.
@@ -601,6 +602,21 @@ async function resolveCredential(
   return null;
 }
 
+/** The request header a scheme's credential travels in, when it travels in one. */
+function credentialHeaderName(schemeName: string): string | undefined {
+  const scheme = SECURITY_SCHEMES[schemeName];
+  if (!scheme) return undefined;
+  if (scheme.type === 'apiKey') {
+    return scheme.in === 'query' || scheme.in === 'cookie'
+      ? undefined
+      : (scheme.name ?? 'apiKey').toLowerCase();
+  }
+  if (scheme.type === 'http' || scheme.type === 'oauth2' || scheme.type === 'openIdConnect') {
+    return 'authorization';
+  }
+  return undefined;
+}
+
 /** True when two credentials of one requirement would overwrite each other. */
 function hasConflict(credentials: UpstreamCredential[]): boolean {
   const seen = new Set<string>();
@@ -637,12 +653,17 @@ function applyCredential(
  * can satisfy. Returns the applied scheme names, or null when no alternative was
  * complete, in which case the request goes out without upstream credentials and
  * the API decides (typically 401).
+ *
+ * \`forwarded\` holds this request's passthrough headers (--header-passthrough). A
+ * forwarded header satisfies the scheme whose credential travels in it, so a client
+ * that sends its own API key still gets the other schemes of an AND requirement.
  */
 export async function applyAuth(
   securityRequirements: SecurityRequirement[] | undefined,
   env: AuthEnv,
   headers: Record<string, string>,
-  url: URL
+  url: URL,
+  forwarded: Record<string, string> = {}
 ): Promise<string[] | null> {
   const requirements = Array.isArray(securityRequirements) ? securityRequirements : [];
   for (const requirement of requirements) {
@@ -651,11 +672,11 @@ export async function applyAuth(
     const credentials: UpstreamCredential[] = [];
     let complete = true;
     for (const [schemeName, scopes] of entries) {
-      const credential = await resolveCredential(
-        schemeName,
-        Array.isArray(scopes) ? scopes : [],
-        env
-      );
+      const headerName = credentialHeaderName(schemeName);
+      const credential: UpstreamCredential | null =
+        headerName !== undefined && forwarded[headerName] !== undefined
+          ? { location: 'header', name: headerName, value: forwarded[headerName] }
+          : await resolveCredential(schemeName, Array.isArray(scopes) ? scopes : [], env);
       if (!credential) {
         complete = false;
         break;

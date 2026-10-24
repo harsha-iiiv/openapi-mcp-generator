@@ -337,19 +337,33 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
   const headerPassthroughNames = Array.isArray(options.headerPassthrough)
     ? options.headerPassthrough.filter(Boolean)
     : [];
-  const headerPassthroughCode =
+  // The configured headers this request carries are collected before upstream auth,
+  // so they also count as credentials for the schemes they carry.
+  const forwardedHeadersCode =
     headerPassthroughNames.length > 0
       ? `
-    // Forward configured inbound headers to the upstream API (issue #55)
+    // Configured inbound headers present on this request (issue #55)
     const __passthroughHeaderNames = ${JSON.stringify(headerPassthroughNames.map((h) => h.toLowerCase()))};
+    const forwardedHeaders: Record<string, string> = {};
     const __inboundHeaders = inboundHeaderStore.getStore();
     if (__inboundHeaders) {
         for (const __name of __passthroughHeaderNames) {
             const __val = __inboundHeaders[__name];
             if (typeof __val !== 'undefined') {
-                headers[__name] = __val;
+                forwardedHeaders[__name] = __val;
             }
         }
+    }
+`
+      : `
+    const forwardedHeaders: Record<string, string> = {};
+`;
+  const headerPassthroughCode =
+    headerPassthroughNames.length > 0
+      ? `
+    // Forward configured inbound headers to the upstream API (issue #55)
+    for (const [__name, __val] of Object.entries(forwardedHeaders)) {
+        headers[__name] = __val;
     }
 `
       : '';
@@ -361,7 +375,7 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
   const securityCode = `
     // Apply upstream credentials for this operation's security requirements
     // (OR across requirement objects, AND within one; see resolveSecurityRequirements).
-    const securityResolution = await resolveSecurityRequirements(definition.securityRequirements, allSecuritySchemes);
+    const securityResolution = await resolveSecurityRequirements(definition.securityRequirements, allSecuritySchemes, forwardedHeaders);
     if (securityResolution.status === 'applied') {
         for (const credential of securityResolution.credentials) {
             applyUpstreamCredential(credential, headers, queryParams);
@@ -490,6 +504,22 @@ async function resolveSchemeCredential(
 }
 
 /**
+ * The request header a scheme's credential travels in, when it travels in one.
+ */
+function credentialHeaderName(scheme: any): string | undefined {
+    if (!scheme) return undefined;
+    if (scheme.type === 'apiKey') {
+        return scheme.in === 'query' || scheme.in === 'cookie' || !scheme.name
+            ? undefined
+            : String(scheme.name).toLowerCase();
+    }
+    if (scheme.type === 'http' || scheme.type === 'oauth2' || scheme.type === 'openIdConnect') {
+        return 'authorization';
+    }
+    return undefined;
+}
+
+/**
  * True when two credentials from one requirement would overwrite each other
  * (for example, two schemes that both need the Authorization header).
  */
@@ -544,10 +574,14 @@ function describeSecurityRequirements(requirements: Record<string, string[]>[]):
  * object must resolve (AND). A partially satisfied alternative is never applied, so
  * an incomplete set of credentials is never sent. An empty object ({}) makes
  * authentication optional: it is used only when no other alternative is complete.
+ * A forwarded passthrough header (--header-passthrough) satisfies the scheme whose
+ * credential travels in it, so a client that sends its own API key still gets the
+ * other schemes of an AND requirement.
  */
 async function resolveSecurityRequirements(
     requirements: Record<string, string[]>[] | undefined,
-    allSecuritySchemes: Record<string, any>
+    allSecuritySchemes: Record<string, any>,
+    forwarded: Record<string, string> = {}
 ): Promise<SecurityResolution> {
     if (!Array.isArray(requirements) || requirements.length === 0) return { status: 'none' };
     let optional = false;
@@ -560,11 +594,21 @@ async function resolveSecurityRequirements(
         const credentials: UpstreamCredential[] = [];
         let complete = true;
         for (const [schemeName, scopes] of entries) {
-            const credential = await resolveSchemeCredential(
-                schemeName,
-                allSecuritySchemes[schemeName],
-                Array.isArray(scopes) ? scopes : []
-            );
+            const headerName = credentialHeaderName(allSecuritySchemes[schemeName]);
+            const credential: UpstreamCredential | null =
+                headerName !== undefined && forwarded[headerName] !== undefined
+                    ? {
+                          schemeName,
+                          location: 'header',
+                          name: headerName,
+                          value: forwarded[headerName],
+                          description: \`forwarded client header '\${headerName}' for '\${schemeName}'\`,
+                      }
+                    : await resolveSchemeCredential(
+                          schemeName,
+                          allSecuritySchemes[schemeName],
+                          Array.isArray(scopes) ? scopes : []
+                      );
             if (!credential) {
                 complete = false;
                 break;
@@ -655,7 +699,7 @@ async function executeApiTool(
         requestBodyData = validatedArgs['requestBody'];
         headers['content-type'] = definition.requestBodyContentType;
     }
-${customAuthCall}${builtinAuthGuardOpen}${securityCode}${builtinAuthGuardClose}
+${forwardedHeadersCode}${customAuthCall}${builtinAuthGuardOpen}${securityCode}${builtinAuthGuardClose}
 ${headerPassthroughCode}
     // Prepare the axios request configuration
     const config: AxiosRequestConfig = {

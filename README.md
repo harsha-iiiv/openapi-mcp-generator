@@ -248,9 +248,10 @@ openssl rand -hex 32   # put the value in .env as MCP_AUTH_TOKEN (Workers: wrang
   behind an OAuth-capable gateway.
 
 **Let each user bring their own upstream key** with `--header-passthrough X-API-Key`: the listed
-headers are forwarded per request, so the server stores no shared secret. Passthrough cannot
-forward `Authorization` while `--inbound-auth bearer` is on, because that header carries the MCP
-token.
+headers are forwarded per request, so the server stores no shared secret. A forwarded header
+satisfies the security scheme whose credential travels in it, so the other schemes of an AND
+requirement are still applied from server configuration. Passthrough cannot forward
+`Authorization` while `--inbound-auth bearer` is on, because that header carries the MCP token.
 
 **Browser origins.** Node HTTP servers reject browser requests whose `Origin` is not loopback
 or listed in `MCP_ALLOWED_ORIGINS` (comma-separated), which blocks DNS-rebinding attacks on

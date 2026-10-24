@@ -309,7 +309,8 @@ describe('#81 security requirements: cloudflare-worker runtime', () => {
     reqs: Record<string, string[]>[] | undefined,
     env: Record<string, string | undefined>,
     headers: Record<string, string>,
-    url: URL
+    url: URL,
+    forwarded?: Record<string, string>
   ) => Promise<string[] | null>;
   const tools = () => extractToolsFromApi(api);
   const requirementsFor = (operationId: string) =>
@@ -394,6 +395,20 @@ describe('#81 security requirements: cloudflare-worker runtime', () => {
     });
     expect(applied).toEqual(['apiKeyQuery']);
     expect(headers['authorization']).toBeUndefined();
+  });
+
+  it('counts a forwarded header as the credential for its scheme in an AND group', async () => {
+    const headers: Record<string, string> = {};
+    const url = new URL(`${upstream.url}/x`);
+    const env = { OAUTH_CLIENT_ID: 'client-id', OAUTH_CLIENT_SECRET: 'client-secret' };
+    const applied = await applyAuth(requirementsFor('andRequirement'), env, headers, url, {
+      'x-api-key': 'user-key',
+    });
+    expect(applied).toEqual(['apiKeyHeader', 'oauth']);
+    expect(headers['x-api-key']).toBe('user-key');
+    expect(headers['authorization']).toBe('Bearer tok-read');
+    // Without the forwarded header the same env leaves the AND group incomplete.
+    expect(await applyAuth(requirementsFor('andRequirement'), env, {}, url)).toBeNull();
   });
 
   it('sends an OpenID Connect token from <SCHEME>_TOKEN', async () => {
@@ -516,6 +531,35 @@ describe('#80 inbound auth and #55 header passthrough: cloudflare-worker', () =>
     await modern.callTool({ name: 'orAlternatives', arguments: {} });
     expect(lastRequest(upstream, '/or').query.api_key).toBe('query-key');
     await modern.close();
+  });
+
+  it('completes an AND requirement with a forwarded key and no server-side key', async () => {
+    const env = {
+      MCP_AUTH_TOKEN: 'correct-token',
+      OAUTH_CLIENT_ID: 'client-id',
+      OAUTH_CLIENT_SECRET: 'client-secret',
+    };
+    const res = await worker.fetch(
+      mcpRequest(
+        {
+          jsonrpc: '2.0',
+          id: 3,
+          method: 'tools/call',
+          params: { name: 'andRequirement', arguments: {} },
+        },
+        {
+          authorization: 'Bearer correct-token',
+          'x-api-key': 'per-user-key',
+          'mcp-protocol-version': '2025-06-18',
+        }
+      ),
+      env
+    );
+    expect(res.status).toBe(200);
+    expect((await readJsonRpc(res)).result.isError ?? false).toBe(false);
+    const seen = lastRequest(upstream, '/and');
+    expect(seen.headers['x-api-key']).toBe('per-user-key');
+    expect(seen.headers['authorization']).toBe('Bearer tok-read');
   });
 
   it('keeps the endpoint public by default (no --inbound-auth)', async () => {
@@ -850,6 +894,60 @@ describe('#80 inbound auth: generated Node HTTP servers', () => {
 });
 
 // --- CLI behavior ---------------------------------------------------------------
+
+describe('streamable-http: header passthrough', () => {
+  let dir: string;
+  const children: ChildProcess[] = [];
+
+  beforeAll(() => {
+    dir = path.join(workdir, 'node-http-passthrough');
+    generateWithCli(specPath, dir, [
+      '--transport',
+      'streamable-http',
+      '--inbound-auth',
+      'bearer',
+      '--header-passthrough',
+      'X-API-Key',
+    ]);
+    buildGenerated(dir);
+  }, 120_000);
+
+  afterAll(async () => {
+    for (const child of children) await stopServer(child);
+  });
+
+  const start = async (env: Record<string, string>) => {
+    const port = await freePort();
+    const child = startNodeServer(dir, {
+      PORT: String(port),
+      MCP_AUTH_TOKEN: 'tok',
+      API_BASE_URL: upstream.url,
+      ...env,
+    });
+    children.push(child);
+    await waitForHealth(port, child);
+    return port;
+  };
+
+  it('completes an AND requirement with a forwarded key and no server-side key', async () => {
+    const port = await start({
+      OAUTH_CLIENT_ID_OAUTH: 'client-id',
+      OAUTH_CLIENT_SECRET_OAUTH: 'client-secret',
+    });
+    const client = new Client({ name: 'passthrough-test', version: '1.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+        requestInit: { headers: { authorization: 'Bearer tok', 'x-api-key': 'per-user-key' } },
+      })
+    );
+    const result = await client.callTool({ name: 'andRequirement', arguments: {} });
+    expect(result.isError ?? false).toBe(false);
+    const seen = lastRequest(upstream, '/and');
+    expect(seen.headers['x-api-key']).toBe('per-user-key');
+    expect(seen.headers['authorization']).toBe('Bearer tok-read');
+    await client.close();
+  }, 60_000);
+});
 
 describe('#80 CLI options', () => {
   it('rejects unknown --inbound-auth modes', () => {
