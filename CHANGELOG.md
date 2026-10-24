@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.1] - 2026-10-24
+
 ### Fixed
 
 - **Cloudflare Worker OAuth2.** Generated Workers read a token you already have from
