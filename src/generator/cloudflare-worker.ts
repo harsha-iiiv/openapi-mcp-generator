@@ -107,7 +107,7 @@ export interface McpToolDefinition {
   inputSchema: any;
   method: string;
   pathTemplate: string;
-  executionParameters: { name: string; in: string }[];
+  executionParameters: { name: string; in: string; style?: string; explode?: boolean }[];
   requestBodyContentType?: string;
   serverUrl?: string;
   securityRequirements: any[];
@@ -135,6 +135,8 @@ interface RuntimeSecurityScheme {
   name?: string;
   scheme?: string;
   tokenUrl?: string | null;
+  /** OAuth2 only: the scheme declares a client credentials flow the Worker can fetch tokens with. */
+  clientCredentials?: boolean;
 }
 
 /**
@@ -158,8 +160,11 @@ function buildRuntimeSecuritySchemes(
       // that write "Basic"/"Bearer".
       map[name] = { type: 'http', scheme: scheme.scheme?.toLowerCase() };
     } else if (scheme.type === 'oauth2') {
+      // Only a client credentials flow lets the Worker fetch a token itself; every
+      // other flow needs a token you already have (<SCHEME>_TOKEN).
+      const clientCredentials = Boolean(scheme.flows?.clientCredentials);
       const tokenUrl = scheme.flows?.clientCredentials?.tokenUrl ?? null;
-      map[name] = { type: 'oauth2', tokenUrl };
+      map[name] = { type: 'oauth2', tokenUrl, clientCredentials };
     } else {
       // openIdConnect (bearer token from <SCHEME>_TOKEN) or any other type.
       map[name] = { type: scheme.type };
@@ -396,6 +401,34 @@ export default {
 
 const DEFAULT_BASE_URL = ${JSON.stringify(input.baseUrl)};
 
+/**
+ * Expands one query or cookie parameter into name/value pairs following its
+ * OpenAPI style and explode settings. Arrays repeat the name when exploded
+ * (tag=red&tag=blue) and are joined by ',', ' ' or '|' otherwise (form,
+ * spaceDelimited, pipeDelimited). Objects support form and deepObject.
+ */
+function serializeParameter(
+  name: string,
+  value: unknown,
+  style: string = 'form',
+  explode: boolean = style === 'form'
+): [string, string][] {
+  const separator = style === 'spaceDelimited' ? ' ' : style === 'pipeDelimited' ? '|' : ',';
+  if (Array.isArray(value)) {
+    if (explode) return value.map((item): [string, string] => [name, String(item)]);
+    return [[name, value.map(String).join(separator)]];
+  }
+  if (typeof value === 'object' && value !== null) {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined && item !== null);
+    if (style === 'deepObject') {
+      return entries.map(([key, item]): [string, string] => [name + '[' + key + ']', String(item)]);
+    }
+    if (explode) return entries.map(([key, item]): [string, string] => [key, String(item)]);
+    return [[name, entries.map(([key, item]) => key + separator + String(item)).join(separator)]];
+  }
+  return [[name, String(value)]];
+}
+
 /** Execute one tool by issuing the upstream HTTP request via global fetch. */
 async function executeApiTool(
   def: McpToolDefinition,
@@ -411,7 +444,8 @@ async function executeApiTool(
     );
     // Substitute path params.
     let pathName = def.pathTemplate;
-    const queryParams = new URLSearchParams();
+    const queryPairs: [string, string][] = [];
+    const cookiePairs: [string, string][] = [];
     let bodyArg: unknown;
 
     for (const p of def.executionParameters) {
@@ -423,8 +457,10 @@ async function executeApiTool(
           encodeURIComponent(String(value))
         );
       } else if (p.in === 'query') {
-        if (Array.isArray(value)) queryParams.set(p.name, value.map(String).join(','));
-        else queryParams.set(p.name, String(value));
+        // OpenAPI style/explode: repeated keys by default, comma-joined with explode: false.
+        queryPairs.push(...serializeParameter(p.name, value, p.style, p.explode));
+      } else if (p.in === 'cookie') {
+        cookiePairs.push(...serializeParameter(p.name, value, p.style, p.explode));
       } else if (p.in === 'header') {
         // collected below into headers
       }
@@ -451,11 +487,17 @@ async function executeApiTool(
     }
 
     const url = new URL(baseUrl + pathName);
-    queryParams.forEach((v, k) => url.searchParams.set(k, v));
+    for (const [name, value] of queryPairs) url.searchParams.append(name, value);
 
     const headers: Record<string, string> = { accept: 'application/json' };
     for (const p of def.executionParameters) {
       if (p.in === 'header' && args[p.name] != null) headers[p.name] = String(args[p.name]);
+    }
+    // Cookie parameters share one Cookie header; an apiKey cookie credential is added to it below.
+    if (cookiePairs.length > 0) {
+      headers['cookie'] = cookiePairs
+        .map(([name, value]) => encodeURIComponent(name) + '=' + encodeURIComponent(value))
+        .join('; ');
     }
 
     let body: string | undefined;
@@ -580,7 +622,14 @@ export function generateWorkerUpstreamAuth(input: CloudflareWorkerGenInput): str
 /** Runtime metadata for the spec's security schemes (embedded at generate time). */
 export const SECURITY_SCHEMES: Record<
   string,
-  { type: string; in?: string; name?: string; scheme?: string; tokenUrl?: string | null }
+  {
+    type: string;
+    in?: string;
+    name?: string;
+    scheme?: string;
+    tokenUrl?: string | null;
+    clientCredentials?: boolean;
+  }
 > = ${securitySchemesJson};
 
 /** Worker environment: vars from wrangler.jsonc plus secrets set with \`wrangler secret put\`. */
@@ -691,6 +740,14 @@ async function resolveCredential(
   }
 
   if (scheme.type === 'oauth2') {
+    // A token you already have wins (<SCHEME>_TOKEN, as for bearer and OpenID Connect).
+    const preAcquired = env[\`\${upper}_TOKEN\`];
+    if (preAcquired) {
+      return { location: 'header', name: 'authorization', value: \`Bearer \${preAcquired}\` };
+    }
+    // Only a client credentials flow can fetch a token; implicit, authorization code
+    // and password flows need a token obtained elsewhere.
+    if (!scheme.clientCredentials) return null;
     const token = await fetchClientCredentialsToken(schemeName, scheme.tokenUrl, scopes, env);
     if (!token) return null;
     return { location: 'header', name: 'authorization', value: \`Bearer \${token}\` };
@@ -764,7 +821,9 @@ function credentialHint(schemeName: string, passthroughNames: string[]): string 
   else if (scheme.type === 'http' && scheme.scheme === 'basic') hint = \`\${upper}_USERNAME (and \${upper}_PASSWORD)\`;
   else if (scheme.type === 'http' || scheme.type === 'openIdConnect') hint = \`\${upper}_TOKEN\`;
   else if (scheme.type === 'oauth2') {
-    hint = \`\${upper}_CLIENT_ID and \${upper}_CLIENT_SECRET\${scheme.tokenUrl ? '' : \` and \${upper}_TOKEN_URL\`}\`;
+    hint = scheme.clientCredentials
+      ? \`\${upper}_TOKEN (or \${upper}_CLIENT_ID and \${upper}_CLIENT_SECRET\${scheme.tokenUrl ? '' : \` and \${upper}_TOKEN_URL\`})\`
+      : \`\${upper}_TOKEN\`;
   } else return \`(security scheme '\${schemeName}' of type \${scheme.type} is not supported)\`;
   const header = credentialHeaderName(schemeName);
   return header !== undefined && passthroughNames.includes(header)
@@ -863,6 +922,7 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
     '# Local development secrets for `wrangler dev`. Copy to `.dev.vars`.',
     '#',
     '# In production set these with: wrangler secret put <NAME>',
+    '# Uncomment the secrets you use and set real values (a "..." placeholder left in place is sent as the credential).',
     '',
   ];
   const schemes = input.securitySchemes ?? {};
@@ -881,19 +941,31 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
           ? scheme.scheme?.toLowerCase()
           : undefined;
       if (scheme && 'type' in scheme && scheme.type === 'http' && httpScheme === 'basic') {
-        lines.push(`${upper}_USERNAME="..."`, `${upper}_PASSWORD="..."`);
+        lines.push(`# ${upper}_USERNAME="..."`, `# ${upper}_PASSWORD="..."`);
       } else if (scheme && 'type' in scheme && scheme.type === 'http') {
-        lines.push(`${upper}_TOKEN="..."`);
+        lines.push(`# ${upper}_TOKEN="..."`);
       } else if (scheme && 'type' in scheme && scheme.type === 'oauth2') {
-        lines.push(`${upper}_CLIENT_ID="..."`, `${upper}_CLIENT_SECRET="..."`);
-        const tokenUrl = scheme.flows?.clientCredentials?.tokenUrl;
-        if (!tokenUrl) {
-          lines.push(`${upper}_TOKEN_URL="..."`);
+        const clientCredentials = scheme.flows?.clientCredentials;
+        if (clientCredentials) {
+          lines.push(
+            `# OAuth2 '${name}': a token you already have, or the client ID and secret to fetch one`,
+            `# ${upper}_TOKEN="..."`,
+            `# ${upper}_CLIENT_ID="..."`,
+            `# ${upper}_CLIENT_SECRET="..."`
+          );
+          if (!clientCredentials.tokenUrl) {
+            lines.push(`# ${upper}_TOKEN_URL="..."`);
+          }
+        } else {
+          lines.push(
+            `# OAuth2 '${name}': an access token you already obtained (the Worker cannot fetch one for this flow)`,
+            `# ${upper}_TOKEN="..."`
+          );
         }
       } else if (scheme && 'type' in scheme && scheme.type === 'openIdConnect') {
-        lines.push(`${upper}_TOKEN="..."`);
+        lines.push(`# ${upper}_TOKEN="..."`);
       } else {
-        lines.push(`${upper}_API_KEY="..."`);
+        lines.push(`# ${upper}_API_KEY="..."`);
       }
     }
   }
@@ -912,7 +984,7 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
       '# Inbound bearer token MCP clients must send to /mcp (Authorization: Bearer <token>).',
       '# Generate one with: openssl rand -hex 32',
       '# To rotate without downtime, set MCP_AUTH_TOKENS="new-token,old-token" instead.',
-      'MCP_AUTH_TOKEN="..."'
+      '# MCP_AUTH_TOKEN="..."'
     );
   }
   return lines.join('\n') + '\n';
@@ -981,17 +1053,23 @@ export function generateWorkerReadme(input: CloudflareWorkerGenInput): string {
             // Emit the secret name(s) that match this scheme's type so the deploy
             // hint stays in sync with .dev.vars.example.
             if (scheme && 'type' in scheme && scheme.type === 'oauth2') {
-              const hasTokenUrl = Boolean(
-                (scheme as OpenAPIV3.OAuth2SecurityScheme).flows?.clientCredentials?.tokenUrl
-              );
+              const clientCredentials = (scheme as OpenAPIV3.OAuth2SecurityScheme).flows
+                ?.clientCredentials;
+              // Without a client credentials flow the Worker cannot fetch a token.
+              if (!clientCredentials) {
+                return `   npx wrangler secret put ${upper}_TOKEN   # OAuth2 access token you already obtained`;
+              }
               const oauthLines = [
                 `   npx wrangler secret put ${upper}_CLIENT_ID`,
                 `   npx wrangler secret put ${upper}_CLIENT_SECRET`,
               ];
               // When the spec omits the token URL, it must be supplied as a secret too.
-              if (!hasTokenUrl) {
+              if (!clientCredentials.tokenUrl) {
                 oauthLines.push(`   npx wrangler secret put ${upper}_TOKEN_URL`);
               }
+              oauthLines.push(
+                `   # or, with an OAuth2 token you already have: npx wrangler secret put ${upper}_TOKEN`
+              );
               return oauthLines.join('\n');
             }
             const httpScheme =
@@ -1094,7 +1172,7 @@ ${secretLines}${inboundSecretLine}
 ## Local development
 
 \`\`\`bash
-cp .dev.vars.example .dev.vars   # fill in your secrets
+cp .dev.vars.example .dev.vars   # uncomment and fill in your secrets
 npm run dev                      # http://localhost:8787/mcp
 \`\`\`
 

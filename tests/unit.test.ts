@@ -299,8 +299,25 @@ describe('#73 operation and path-item servers', () => {
     expect(byName.operationLevel.serverUrl).toBe('/v2');
     expect(byName.pathLevel.serverUrl).toBe('https://path.example.com');
     expect(byName.rootLevel.serverUrl).toBeUndefined();
-    expect((byName.rootLevel as any).baseUrl).toBe('https://prod.example.com/api');
+    expect(byName.rootLevel.baseUrl).toBe('https://prod.example.com/api');
     expect(generateToolDefinitionMap(tools)).toContain('serverUrl: "/v2",');
+  });
+
+  it('returns the typed baseUrl on every tool, next to its own serverUrl', async () => {
+    const tools = await getToolsFromOpenApi(api);
+    const baseUrls: (string | undefined)[] = tools.map((tool) => tool.baseUrl);
+    expect(baseUrls).toEqual(tools.map(() => 'https://prod.example.com/api'));
+    const overridden = await getToolsFromOpenApi(api, { baseUrl: 'https://staging.example.com/' });
+    expect(overridden.find((t) => t.name === 'operationLevel')?.baseUrl).toBe(
+      'https://staging.example.com'
+    );
+    const { servers: _servers, ...withoutServers } = api;
+    void _servers;
+    const bare = await getToolsFromOpenApi({
+      ...withoutServers,
+      paths: { '/b': api.paths['/b'] },
+    } as OpenAPIV3.Document);
+    expect(bare[0].baseUrl).toBe('');
   });
 });
 
@@ -970,10 +987,12 @@ describe('#66 basic auth with empty password', () => {
 // --- #41: array query params -------------------------------------------------
 
 describe('#41 array query param serialization', () => {
-  it('emits a paramsSerializer that joins arrays with commas', () => {
+  it('emits a paramsSerializer that follows each parameter style and explode', () => {
     const code = generateExecuteApiToolFunction();
     expect(code).toContain('paramsSerializer');
-    expect(code).toContain("value.join(',')");
+    expect(code).toContain('serializeParameter(key, value, param?.style, param?.explode)');
+    // Commas only for explode: false, not for every array (see parameter-serialization.test.ts).
+    expect(code).not.toContain("value.join(',')");
   });
 });
 
@@ -1003,8 +1022,8 @@ describe('opt-in security/execution options', () => {
     expect(inBody).toContain("formData.append('client_id', clientId)");
     expect(inBody).toContain("formData.append('client_secret', clientSecret)");
     const header = generateOAuth2TokenAcquisitionCode({});
-    expect(header).toContain("'Authorization': `Basic");
-    expect(header).not.toContain("formData.append('client_id'");
+    expect(header).toContain("tokenRequestHeaders['Authorization'] = `Basic");
+    expect(header).not.toContain("formData.append('client_secret'");
   });
 
   it('#9 custom-auth wires the hook import and call', () => {
@@ -1324,8 +1343,9 @@ describe('cloudflare-worker target', () => {
       serverName: 'petstore-mcp',
       serverVersion: '1.0.0',
       securitySchemes: {
-        oauth: { type: 'oauth2', flows: {} },
-      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+        // A client credentials flow without its (required) tokenUrl.
+        oauth: { type: 'oauth2', flows: { clientCredentials: { scopes: {} } } },
+      } as unknown as OpenAPIV3.ComponentsObject['securitySchemes'],
       baseUrl: 'https://petstore.example.com',
     });
     const devVars = fileContent(files, '.dev.vars.example');
@@ -1478,7 +1498,7 @@ describe('generated OAuth2 docs', () => {
     expect(docs).not.toContain('## Token Caching');
   });
 
-  it('documents only OAUTH_TOKEN for password-only schemes', () => {
+  it('documents the password-grant variables for password-only schemes', () => {
     const docs = generateOAuth2Docs({
       legacy: {
         type: 'oauth2',
@@ -1486,9 +1506,30 @@ describe('generated OAuth2 docs', () => {
       },
     });
     expect(docs).toContain('`OAUTH_TOKEN_LEGACY`');
-    expect(docs).not.toContain('OAUTH_CLIENT_ID_LEGACY');
+    expect(docs).toContain('`OAUTH_USERNAME_LEGACY`');
+    expect(docs).toContain('`OAUTH_PASSWORD_LEGACY`');
     expect(docs).toContain('**Password Flow:**');
-    expect(docs).not.toContain('## Token Caching');
+    expect(docs).toContain('## Token Caching');
+  });
+
+  it('lists password-grant variables only for schemes that use the password grant', () => {
+    for (const docs of [
+      generateOAuth2Docs(clientCredentials),
+      generateOAuth2Docs(implicitOnly),
+      // A client credentials flow wins over a password flow on the same scheme.
+      generateOAuth2Docs({
+        both: {
+          type: 'oauth2',
+          flows: {
+            clientCredentials: { tokenUrl: 'https://example.com/token', scopes: {} },
+            password: { tokenUrl: 'https://example.com/token', scopes: {} },
+          },
+        },
+      }),
+    ]) {
+      expect(docs).not.toContain('OAUTH_USERNAME_');
+      expect(docs).not.toContain('OAUTH_PASSWORD_');
+    }
   });
 
   it('documents client credentials and token caching when the server can fetch tokens', () => {
