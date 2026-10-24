@@ -18,5 +18,3 @@ package-lock.json
 # CI / repo metadata
 .github/
 
-# Internal planning artifacts (specs/plans), not shipped source
-docs/superpowers/
