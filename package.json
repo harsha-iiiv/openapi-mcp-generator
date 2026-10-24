@@ -6,7 +6,7 @@
   "author": "Harsha",
   "type": "module",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22"
   },
   "bin": {
     "openapi-mcp-generator": "./bin/openapi-mcp-generator.js"

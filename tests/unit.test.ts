@@ -33,6 +33,8 @@ import {
 import { generateMcpServerCode, generateCustomAuthStub } from '../src/generator/server-code.js';
 import { generateCloudflareWorkerFiles } from '../src/generator/cloudflare-worker.js';
 import { getToolsFromOpenApi } from '../src/api.js';
+import { generatePackageJson } from '../src/generator/package-json.js';
+import rootPackageJson from '../package.json' with { type: 'json' };
 import type { McpToolDefinition } from '../src/types/index.js';
 
 // --- #67: template-literal injection ---------------------------------------
@@ -963,5 +965,21 @@ describe('cloudflare-worker target', () => {
     expect(index).toContain('API_BASE_URL');
     // It checks for an http(s) scheme before constructing the URL.
     expect(index).toMatch(/test\(baseUrl\)/);
+  });
+});
+
+// --- generated project manifests -------------------------------------------------
+
+describe('generated package.json', () => {
+  const manifest = (transport: string) =>
+    JSON.parse(generatePackageJson('demo', '1.0.0', transport));
+
+  it('requires Node 22 for the generator and every generated Node project', () => {
+    expect(rootPackageJson.engines.node).toBe('>=22');
+    for (const transport of ['stdio', 'web', 'streamable-http']) {
+      const pkg = manifest(transport);
+      expect(pkg.engines.node).toBe('>=22');
+      expect(pkg.devDependencies['@types/node']).toMatch(/^\^22\./);
+    }
   });
 });

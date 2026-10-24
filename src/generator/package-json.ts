@@ -28,7 +28,7 @@ export function generatePackageJson(
       prestart: 'npm run build',
     },
     engines: {
-      node: '>=20.0.0',
+      node: '>=22',
     },
     dependencies: {
       // MCP TypeScript SDK v2: serves MCP 2026-07-28 and 2025-era clients.
@@ -39,7 +39,7 @@ export function generatePackageJson(
       'json-schema-to-zod': '^2.6.1',
     },
     devDependencies: {
-      '@types/node': '^22.15.2',
+      '@types/node': '^22.17.2',
       typescript: '^5.8.3',
       shx: '^0.4.0',
     },
