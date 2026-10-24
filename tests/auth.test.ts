@@ -573,6 +573,11 @@ describe('#81 security requirements: generated Node server (stdio)', () => {
     expect(failed.headers['authorization']).toBeUndefined();
   });
 
+  it('reports unknown tools and upstream failures as tool errors (isError)', async () => {
+    const unknown = await client.callTool({ name: 'no_such_tool', arguments: {} });
+    expect(unknown.isError).toBe(true);
+  });
+
   it('requests a token for the full scope set of the operation', async () => {
     await callTool('scopedOauth');
     expect(lastRequest(upstream, '/scoped').headers['authorization']).toBe('Bearer tok-read+write');

@@ -613,10 +613,10 @@ async function executeApiTool(
     } catch (error: unknown) {
         if (error instanceof ZodError) {
             const validationErrorMessage = \`Invalid arguments for tool '\${toolName}': \${error.errors.map(e => \`\${e.path.join('.')} (\${e.code}): \${e.message}\`).join(', ')}\`;
-            return { content: [{ type: 'text', text: validationErrorMessage }] };
+            return { isError: true, content: [{ type: 'text', text: validationErrorMessage }] };
         } else {
              const errorMessage = error instanceof Error ? error.message : String(error);
-             return { content: [{ type: 'text', text: \`Internal error during validation setup: \${errorMessage}\` }] };
+             return { isError: true, content: [{ type: 'text', text: \`Internal error during validation setup: \${errorMessage}\` }] };
         }
     }
 
@@ -737,8 +737,8 @@ ${headerPassthroughCode}
     // Log error to stderr
     console.error(\`Error during execution of tool '\${toolName}':\`, errorMessage);
     
-    // Return error message to client
-    return { content: [{ type: "text", text: errorMessage }] };
+    // Return the error to the client as a tool error so the model knows the call failed
+    return { isError: true, content: [{ type: "text", text: errorMessage }] };
   }
 }
 `;
