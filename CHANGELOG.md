@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Universal playground.** The hosted playground at https://mcp.pidata.tech/playground/ connects
+  to any remote MCP server from the browser with nothing to install: custom headers, a bearer
+  token, or OAuth sign-in (client ID metadata document, then dynamic client registration, then a
+  manual client ID, always with PKCE). It covers tools, resources and resource templates, prompts,
+  completion, logging, progress and cancellation, and answers server requests for elicitation,
+  sampling and roots (#93).
+- **Optional relay** (`relay/`, not published to npm): a small open-source Cloudflare Worker that
+  forwards the playground's requests to servers that block browser requests. It accepts only
+  `https://` targets on the default port, refuses private and internal addresses, stores nothing
+  and logs only the method, target host, status and duration, never headers, tokens or bodies.
+  See `relay/README.md` (#93).
+
+### Changed
+
+- Generated `web` and `streamable-http` servers ship the updated playground with the same file
+  list and Content Security Policy. The hosted-only OAuth and relay controls are hidden there,
+  and the embedded playground grows from about 85 KB to about 183 KB uncompressed (#93).
+
 ## [5.0.1] - 2026-10-24
 
 ### Fixed
