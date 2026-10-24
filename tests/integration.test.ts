@@ -63,8 +63,7 @@ describe('integration: generate + typecheck', () => {
   let workdir: string;
 
   beforeAll(() => {
-    // Build the generator so dist/index.js exists.
-    execFileSync('npm', ['run', 'build'], { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' });
+    // dist/ is built once by tests/global-setup.ts.
     // Generate under the repo root so upward node_modules resolution finds peer deps.
     workdir = fs.mkdtempSync(path.join(repoRoot, '.test-tmp-'));
   });
