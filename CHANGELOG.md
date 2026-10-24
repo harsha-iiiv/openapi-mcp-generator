@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-10-24
+
 ### Breaking: MCP 2026-07-28 via MCP TypeScript SDK v2 (#79)
 
 - Generated servers depend on `@modelcontextprotocol/server` (SDK v2) instead of

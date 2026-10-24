@@ -4,8 +4,8 @@
 
 | Version | Supported                                                      |
 | ------- | -------------------------------------------------------------- |
-| 4.x     | Yes, security fixes are released for the latest minor version. |
-| < 4.0   | No. Please upgrade: 4.0.0 fixed two reported vulnerabilities.  |
+| 5.x     | Yes, security fixes are released for the latest minor version. |
+| < 5.0   | No. Please upgrade to 5.x.                                     |
 
 ## Reporting a vulnerability
 
