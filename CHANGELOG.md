@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cloudflare Worker OAuth2.** Generated Workers read a token you already have from
+  `<SCHEME>_TOKEN`, which wins when set, and request a client-credentials token only for
+  schemes that declare a `clientCredentials` flow. Implicit, authorization code and
+  password-only schemes no longer attempt that grant; set `<SCHEME>_TOKEN` for them. The
+  missing-credentials error, `.dev.vars.example` and the generated README name the secrets
+  each flow uses.
+- **Placeholder credentials are no longer sent upstream.** Every credential line in the generated
+  `.env.example` and the Worker's `.dev.vars.example` (including `MCP_AUTH_TOKEN`) is commented
+  out, so copying the file unchanged leaves secured tools failing closed instead of sending
+  values such as `your_api_key_here`. Uncomment and set the variables you use.
+- **OAuth2 password flow.** Schemes with only a password flow request tokens with the resource
+  owner password grant (`grant_type=password`) from `OAUTH_USERNAME_<SCHEME>` and
+  `OAUTH_PASSWORD_<SCHEME>`, instead of sending `grant_type=client_credentials`.
+  `OAUTH_CLIENT_ID_<SCHEME>` and `OAUTH_CLIENT_SECRET_<SCHEME>` authenticate the client when the
+  token endpoint needs them (the client ID alone for a public client), and `OAUTH_TOKEN_<SCHEME>`
+  still wins. Schemes with a client credentials flow are unchanged.
+- **`baseUrl` is declared on `McpToolDefinition`**, so TypeScript callers of
+  `getToolsFromOpenApi` no longer need a cast to read it.
+- **Exclusive bound messages.** A value equal to an `exclusiveMinimum` or `exclusiveMaximum` is
+  reported as `must be greater than N` or `must be less than N` instead of, for example,
+  `1 is less than 1`.
+- The generated `.env.example` leaves `API_BASE_URL` commented out, so it no longer overrides
+  the spec's server URL with a placeholder (#91).
+- Generated OAuth2 docs list the variables each flow uses: `OAUTH_TOKEN_<SCHEME>` for every
+  scheme and the client ID and secret only for client credentials flows (#91).
+- The playground matches each tool response to the request it answers, so reconnects and server
+  requests that reuse ids no longer show stale results (#91).
+- OAuth2 token requests no longer log the token URL (#91).
+
 ## [5.0.0] - 2026-10-24
 
 ### Breaking: MCP 2026-07-28 via MCP TypeScript SDK v2 (#79)
