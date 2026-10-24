@@ -179,6 +179,7 @@ interface McpToolDefinition {
   executionParameters: { name: string; in: string }[];
   requestBodyContentType?: string;
   serverUrl?: string; // operation or path-item server, variables resolved
+  baseUrl?: string; // set by getToolsFromOpenApi: the baseUrl option or root server, else ''
   securityRequirements: OpenAPIV3.SecurityRequirementObject[];
   operationId: string;
   tags?: string[];
@@ -191,9 +192,9 @@ interface McpToolDefinition {
 `inputSchema` keeps `integer` types, turns `example` into `examples` and leaves out `readOnly`
 properties. Annotations come from the HTTP method (GET and HEAD are read-only, DELETE is
 destructive, PUT and DELETE are idempotent) and can be overridden per operation with
-`x-mcp-annotations`. At runtime, each returned tool also carries `baseUrl`, the resolved base URL or an
-empty string. `McpToolDefinition` does not declare it yet, so TypeScript code needs a cast to
-read it.
+`x-mcp-annotations`. Each tool returned by `getToolsFromOpenApi` carries `baseUrl`: the `baseUrl`
+option, else the spec's root server, else an empty string. An operation or path-item server is in
+`serverUrl` and takes precedence when calling the API.
 
 More filters:
 

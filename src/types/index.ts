@@ -142,6 +142,13 @@ export interface McpToolDefinition {
    * Absolute URLs replace the base URL; relative ones resolve against it.
    */
   serverUrl?: string;
+  /**
+   * Base URL for the API: `GetToolsOptions.baseUrl`, else the spec's first root server
+   * (variables resolved), else an empty string. Set on every tool returned by
+   * `getToolsFromOpenApi`. An operation or path-item server is reported in `serverUrl`
+   * and takes precedence over this value when calling the API.
+   */
+  baseUrl?: string;
   /** Security requirements for this operation */
   securityRequirements: OpenAPIV3.SecurityRequirementObject[];
   /** Original operation ID from the OpenAPI spec */

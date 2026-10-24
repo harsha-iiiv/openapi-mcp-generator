@@ -299,8 +299,25 @@ describe('#73 operation and path-item servers', () => {
     expect(byName.operationLevel.serverUrl).toBe('/v2');
     expect(byName.pathLevel.serverUrl).toBe('https://path.example.com');
     expect(byName.rootLevel.serverUrl).toBeUndefined();
-    expect((byName.rootLevel as any).baseUrl).toBe('https://prod.example.com/api');
+    expect(byName.rootLevel.baseUrl).toBe('https://prod.example.com/api');
     expect(generateToolDefinitionMap(tools)).toContain('serverUrl: "/v2",');
+  });
+
+  it('returns the typed baseUrl on every tool, next to its own serverUrl', async () => {
+    const tools = await getToolsFromOpenApi(api);
+    const baseUrls: (string | undefined)[] = tools.map((tool) => tool.baseUrl);
+    expect(baseUrls).toEqual(tools.map(() => 'https://prod.example.com/api'));
+    const overridden = await getToolsFromOpenApi(api, { baseUrl: 'https://staging.example.com/' });
+    expect(overridden.find((t) => t.name === 'operationLevel')?.baseUrl).toBe(
+      'https://staging.example.com'
+    );
+    const { servers: _servers, ...withoutServers } = api;
+    void _servers;
+    const bare = await getToolsFromOpenApi({
+      ...withoutServers,
+      paths: { '/b': api.paths['/b'] },
+    } as OpenAPIV3.Document);
+    expect(bare[0].baseUrl).toBe('');
   });
 });
 
