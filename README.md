@@ -250,7 +250,8 @@ requirement are still applied from server configuration. Passthrough cannot forw
 
 **Idle sessions.** `streamable-http` servers close sessions idle longer than
 `MCP_SESSION_IDLE_TIMEOUT` seconds (default 1800, `0` disables), so clients that disconnect
-without `DELETE` do not hold memory. A returning client gets `404` and starts a new session.
+without `DELETE` do not hold memory. A session with an open stream or a request in flight is
+not idle. A returning client gets `404` and starts a new session.
 
 **Browser origins.** Node HTTP servers reject browser requests whose `Origin` is not loopback
 or listed in `MCP_ALLOWED_ORIGINS` (comma-separated), which blocks DNS-rebinding attacks on

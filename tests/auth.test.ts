@@ -883,34 +883,74 @@ describe('streamable-http: header passthrough and session lifecycle', () => {
     await client.close();
   }, 60_000);
 
+  /** Opens a session with raw requests (no client-held streams) and returns a request helper. */
+  const openSession = async (port: number) => {
+    const url = `http://127.0.0.1:${port}/mcp`;
+    const base = {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      authorization: 'Bearer tok',
+    };
+    const init = await fetch(url, {
+      method: 'POST',
+      headers: base,
+      body: JSON.stringify(initializeBody),
+    });
+    expect(init.status).toBe(200);
+    await init.text();
+    const sessionId = init.headers.get('mcp-session-id') ?? '';
+    expect(sessionId).not.toBe('');
+    const headers = { ...base, 'mcp-session-id': sessionId, 'mcp-protocol-version': '2025-06-18' };
+    const initialized = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    });
+    expect(initialized.status).toBe(202);
+    const listTools = async () => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/list', params: {} }),
+      });
+      await res.text();
+      return res.status;
+    };
+    return { url, headers, listTools };
+  };
+
   it('closes sessions idle longer than MCP_SESSION_IDLE_TIMEOUT', async () => {
     const port = await start({ MCP_SESSION_IDLE_TIMEOUT: '1' });
-    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
-      requestInit: { headers: { authorization: 'Bearer tok' } },
-    });
-    const client = new Client({ name: 'idle-test', version: '1.0.0' });
-    await client.connect(transport);
-    expect((await client.listTools()).tools.length).toBeGreaterThan(0);
-    const sessionId = transport.sessionId ?? '';
-    expect(sessionId).not.toBe('');
-
+    const session = await openSession(port);
+    expect(await session.listTools()).toBe(200);
     await new Promise((r) => setTimeout(r, 2600));
-    const stale = await fetch(`http://127.0.0.1:${port}/mcp`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-        authorization: 'Bearer tok',
-        'mcp-session-id': sessionId,
-        'mcp-protocol-version': '2025-06-18',
-      },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/list', params: {} }),
-    });
-    expect(stale.status).toBe(404);
-    await client.close().catch(() => undefined);
+    expect(await session.listTools()).toBe(404);
     expect(fs.readFileSync(path.join(dir, '.env.example'), 'utf8')).toMatch(
       /^MCP_SESSION_IDLE_TIMEOUT=$/m
     );
+  }, 60_000);
+
+  it('keeps a session with an open GET stream, and expires it once the stream closes', async () => {
+    const port = await start({ MCP_SESSION_IDLE_TIMEOUT: '1' });
+    const session = await openSession(port);
+    const abort = new AbortController();
+    const stream = await fetch(session.url, {
+      method: 'GET',
+      headers: { ...session.headers, accept: 'text/event-stream' },
+      signal: abort.signal,
+    });
+    expect(stream.status).toBe(200);
+    const reader = stream.body!.getReader();
+    reader.read().catch(() => undefined);
+
+    // Past the timeout while the stream is open: still in use, not idle.
+    await new Promise((r) => setTimeout(r, 2600));
+    expect(await session.listTools()).toBe(200);
+
+    abort.abort();
+    await reader.cancel().catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 2600));
+    expect(await session.listTools()).toBe(404);
   }, 60_000);
 });
 

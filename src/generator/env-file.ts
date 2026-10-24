@@ -82,7 +82,8 @@ API_BASE_URL=your_api_base_url_here
   if (options.streamableHttp) {
     content += `
 # Seconds a Streamable HTTP session may stay idle before the server closes it
-# (default 1800; 0 disables). Clients that come back start a new session.
+# (default 1800; 0 disables). An open stream keeps a session in use. Clients that
+# come back start a new session.
 MCP_SESSION_IDLE_TIMEOUT=
 `;
   }

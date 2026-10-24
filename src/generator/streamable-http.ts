@@ -71,8 +71,10 @@ type AppEnv = { Variables: { inboundPrincipal?: string } };
 interface Session {
   transport: WebStandardStreamableHTTPServerTransport;
   principal?: string;
-  /** Last request time (ms), for closing sessions abandoned without DELETE. */
+  /** When the session last finished a request (ms), for closing abandoned sessions. */
   lastSeen: number;
+  /** Requests and streams in flight, including an open GET stream; never idle while > 0. */
+  active: number;
 }
 
 /** Default idle time after which an open session is closed: 30 minutes. */
@@ -93,6 +95,46 @@ function sessionIdleTimeoutMs(): number {
   return seconds * 1000;
 }
 ${generateNodeOriginGuard()}${generateNodeInboundAuthMiddleware(inboundAuth)}${collectHeadersFn}
+/**
+ * Returns the response with a body that calls \`done\` once, when the body ends, fails or
+ * is cancelled (the client disconnected). This tracks the full life of an SSE stream.
+ */
+function onBodyDone(res: Response, done: () => void): Response {
+  if (!res.body) {
+    done();
+    return res;
+  }
+  const reader = res.body.getReader();
+  let finished = false;
+  const finish = () => {
+    if (!finished) {
+      finished = true;
+      done();
+    }
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done: end, value } = await reader.read();
+        if (end) {
+          finish();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (err) {
+        finish();
+        controller.error(err);
+      }
+    },
+    cancel(reason) {
+      finish();
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+}
+
 /** JSON-RPC error body for transport-level failures. */
 function jsonRpcError(code: number, message: string) {
   return { jsonrpc: '2.0' as const, error: { code, message }, id: null };
@@ -129,7 +171,8 @@ ${generateNodeInboundAuthMounts(inboundAuth, ['/mcp'])}
     const sweep = setInterval(() => {
       const now = Date.now();
       for (const [id, session] of sessions) {
-        if (now - session.lastSeen < idleTimeoutMs) continue;
+        // A session with an open stream or request in flight is in use, not idle.
+        if (session.active > 0 || now - session.lastSeen < idleTimeoutMs) continue;
         console.error(\`Closing idle session: \${id}\`);
         sessions.delete(id);
         session.transport.close().catch((err) => console.error('Error closing idle session:', err));
@@ -156,8 +199,22 @@ ${generateNodeInboundAuthMounts(inboundAuth, ['/mcp'])}
       if (!session || session.principal !== principal) {
         return c.json(jsonRpcError(-32001, 'Session not found'), 404);
       }
+      // Count the request until its response body ends, so a long-lived GET stream or
+      // slow tool call keeps the session out of the idle sweep.
+      session.active += 1;
       session.lastSeen = Date.now();
-      return ${withHeaders('session.transport.handleRequest(c.req.raw)')};
+      const release = () => {
+        session.active -= 1;
+        session.lastSeen = Date.now();
+      };
+      let response: Response;
+      try {
+        response = await ${withHeaders('session.transport.handleRequest(c.req.raw)')};
+      } catch (err) {
+        release();
+        throw err;
+      }
+      return onBodyDone(response, release);
     }
 
     if (c.req.method !== 'POST') {
@@ -179,7 +236,7 @@ ${generateNodeInboundAuthMounts(inboundAuth, ['/mcp'])}
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
         console.error(\`New session established: \${id}\`);
-        sessions.set(id, { transport, principal, lastSeen: Date.now() });
+        sessions.set(id, { transport, principal, lastSeen: Date.now(), active: 0 });
       },
       onsessionclosed: (id) => {
         console.error(\`Session closed: \${id}\`);

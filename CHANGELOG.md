@@ -55,7 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   incomplete when the server holds no key for that scheme, so the requirement's other
   credentials (for example an OAuth2 token) are sent too.
 - `streamable-http`: sessions are released on every close path, and sessions idle longer than
-  `MCP_SESSION_IDLE_TIMEOUT` seconds (default 1800, `0` disables) are closed. Clients that
+  `MCP_SESSION_IDLE_TIMEOUT` seconds (default 1800, `0` disables) are closed; an open stream or
+  a request in flight keeps a session in use. Clients that
   disconnected without `DELETE` previously kept their server instance in memory until restart.
 
 ### Changed
