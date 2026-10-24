@@ -90,6 +90,8 @@ export interface SecurityCodeOptions {
   headerPassthrough?: string[];
   /** Generate and invoke a custom auth hook before built-in auth (issue #9). */
   customAuth?: boolean;
+  /** Target transport; header passthrough only works on the HTTP transports. */
+  transport?: string;
 }
 
 /**
@@ -368,6 +370,13 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
 `
       : '';
 
+  // Headers a client can send instead of a configured credential (HTTP transports only;
+  // stdio has no inbound headers).
+  const passthroughHintNames =
+    options.transport === 'web' || options.transport === 'streamable-http'
+      ? headerPassthroughNames.map((h) => h.toLowerCase())
+      : [];
+
   // Upstream auth (issue #81): OpenAPI Security Requirement semantics. Every
   // requirement object is an alternative (OR); every scheme inside one object must
   // be satisfied together (AND). Credentials are resolved for a whole alternative
@@ -382,7 +391,15 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
             console.error(\`Applied \${credential.description}\`);
         }
     } else if (securityResolution.status === 'unsatisfied') {
-        console.warn(\`Tool '\${toolName}' requires security: \${securityResolution.summary}, but no complete set of credentials is configured. Sending the request without upstream credentials.\`);
+        // Fail closed (issue #82): do not call the API without the credentials it requires,
+        // unless MCP_ALLOW_MISSING_CREDENTIALS=true restores the old warn-and-send behavior.
+        if (String(process.env.MCP_ALLOW_MISSING_CREDENTIALS ?? '').toLowerCase() === 'true') {
+            console.warn(\`Tool '\${toolName}' requires security: \${securityResolution.summary}, but no complete set of credentials is configured. Sending the request without upstream credentials (MCP_ALLOW_MISSING_CREDENTIALS=true).\`);
+        } else {
+            const message = describeMissingCredentials(toolName, definition.securityRequirements, allSecuritySchemes, ${JSON.stringify(passthroughHintNames)});
+            console.error(message);
+            return { isError: true, content: [{ type: 'text', text: message }] };
+        }
     }
     `;
 
@@ -568,6 +585,55 @@ function describeSecurityRequirements(requirements: Record<string, string[]>[]):
 }
 
 /**
+ * Environment variables (or forwarded headers) that supply one scheme's credential.
+ */
+function credentialHint(schemeName: string, scheme: any, passthroughNames: string[]): string {
+    const suffix = schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+    let hint: string;
+    if (!scheme) {
+        return \`(security scheme '\${schemeName}' is not defined in the spec)\`;
+    } else if (scheme.type === 'apiKey') {
+        hint = \`API_KEY_\${suffix}\`;
+    } else if (scheme.type === 'http' && String(scheme.scheme ?? '').toLowerCase() === 'bearer') {
+        hint = \`BEARER_TOKEN_\${suffix}\`;
+    } else if (scheme.type === 'http' && String(scheme.scheme ?? '').toLowerCase() === 'basic') {
+        hint = \`BASIC_USERNAME_\${suffix} (and BASIC_PASSWORD_\${suffix})\`;
+    } else if (scheme.type === 'oauth2') {
+        hint = scheme.flows?.clientCredentials || scheme.flows?.password
+            ? \`OAUTH_TOKEN_\${suffix} (or OAUTH_CLIENT_ID_\${suffix} and OAUTH_CLIENT_SECRET_\${suffix})\`
+            : \`OAUTH_TOKEN_\${suffix}\`;
+    } else if (scheme.type === 'openIdConnect') {
+        hint = \`OPENID_TOKEN_\${suffix}\`;
+    } else {
+        return \`(security scheme '\${schemeName}' of type \${scheme.type} is not supported)\`;
+    }
+    const header = credentialHeaderName(scheme);
+    return header !== undefined && passthroughNames.includes(header)
+        ? \`\${hint} or the '\${header}' request header\`
+        : hint;
+}
+
+/**
+ * Tool error text for an operation whose security requirements cannot be met,
+ * e.g. "Missing credentials for 'getPet': set API_KEY_PETSTORE_AUTH."
+ */
+function describeMissingCredentials(
+    toolName: string,
+    requirements: Record<string, string[]>[],
+    allSecuritySchemes: Record<string, any>,
+    passthroughNames: string[]
+): string {
+    const alternatives = requirements
+        .filter((requirement) => Object.keys(requirement ?? {}).length > 0)
+        .map((requirement) =>
+            Object.keys(requirement)
+                .map((schemeName) => credentialHint(schemeName, allSecuritySchemes[schemeName], passthroughNames))
+                .join(' and ')
+        );
+    return \`Missing credentials for '\${toolName}': set \${alternatives.join(', or ')}. Required security: \${describeSecurityRequirements(requirements)}.\`;
+}
+
+/**
  * Resolves an operation's OpenAPI security requirements (issue #81).
  *
  * Requirement objects are alternatives tried in order (OR); every scheme inside one
@@ -648,20 +714,12 @@ async function executeApiTool(
     allSecuritySchemes: Record<string, any>
 ): Promise<CallToolResult> {
   try {
-    // Validate arguments against the input schema
-    let validatedArgs: JsonObject;
-    try {
-        const zodSchema = getZodSchemaFromJsonSchema(definition.inputSchema, toolName);
-        const argsToParse = (typeof toolArgs === 'object' && toolArgs !== null) ? toolArgs : {};
-        validatedArgs = zodSchema.parse(argsToParse);
-    } catch (error: unknown) {
-        if (error instanceof ZodError) {
-            const validationErrorMessage = \`Invalid arguments for tool '\${toolName}': \${error.errors.map(e => \`\${e.path.join('.')} (\${e.code}): \${e.message}\`).join(', ')}\`;
-            return { isError: true, content: [{ type: 'text', text: validationErrorMessage }] };
-        } else {
-             const errorMessage = error instanceof Error ? error.message : String(error);
-             return { isError: true, content: [{ type: 'text', text: \`Internal error during validation setup: \${errorMessage}\` }] };
-        }
+    // Validate arguments against the tool's JSON Schema (no code generation, no eval).
+    // Invalid arguments are a tool execution error the model can read and correct.
+    const validatedArgs: JsonObject = (typeof toolArgs === 'object' && toolArgs !== null) ? toolArgs : {};
+    const validationError = validateToolArguments(toolName, definition.inputSchema, validatedArgs);
+    if (validationError) {
+        return { isError: true, content: [{ type: 'text', text: validationError }] };
     }
 
     // Prepare URL, query parameters, headers, and request body
@@ -691,8 +749,9 @@ async function executeApiTool(
         throw new Error(\`Failed to resolve path parameters: \${urlPath}\`);
     }
     
-    // Construct the full URL
-    const requestUrl = API_BASE_URL ? \`\${API_BASE_URL}\${urlPath}\` : urlPath;
+    // Construct the full URL (operation and path-item servers win over the base URL)
+    const baseUrl = resolveOperationBaseUrl(definition.serverUrl, API_BASE_URL);
+    const requestUrl = baseUrl ? \`\${baseUrl}\${urlPath}\` : urlPath;
 
     // Handle request body if needed
     if (definition.requestBodyContentType && typeof validatedArgs['requestBody'] !== 'undefined') {
@@ -751,14 +810,31 @@ ${headerPassthroughCode}
          responseText = \`(Status: \${response.status} - No body content)\`; 
     }
     
-    // Return formatted response
-    return { 
-        content: [ 
-            { 
-                type: "text", 
-                text: \`API Response (Status: \${response.status}):\\n\${responseText}\` 
-            } 
-        ], 
+    const text = \`API Response (Status: \${response.status}):\\n\${responseText}\`;
+
+    // A JSON object response is also returned as structuredContent (text unchanged).
+    const structuredContent =
+        contentType.includes('application/json') &&
+        typeof response.data === 'object' && response.data !== null && !Array.isArray(response.data)
+            ? (response.data as Record<string, unknown>)
+            : undefined;
+
+    // With a declared outputSchema (--output-schema), never return a result that violates it.
+    if (definition.outputSchema !== undefined) {
+        const outputError = structuredContent === undefined
+            ? 'expected a JSON object response'
+            : validateToolOutput(toolName, definition.outputSchema, structuredContent);
+        if (outputError) {
+            return {
+                isError: true,
+                content: [{ type: 'text', text: \`Response for tool '\${toolName}' does not match its output schema: \${outputError}\\n\\n\${text}\` }],
+            };
+        }
+    }
+
+    return {
+        content: [{ type: 'text', text }],
+        ...(structuredContent !== undefined && { structuredContent }),
     };
 
   } catch (error: unknown) {

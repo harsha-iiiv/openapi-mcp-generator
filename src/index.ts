@@ -16,8 +16,6 @@ import {
   generatePackageJson,
   generateTsconfigJson,
   generateGitignore,
-  generateEslintConfig,
-  generateJestConfig,
   generatePrettierConfig,
   generateEnvExample,
   generateOAuth2Docs,
@@ -31,14 +29,27 @@ import {
 
 // Import types
 import { CliOptions, InboundAuthMode, TransportType } from './types/index.js';
-import { normalizeBoolean } from './utils/helpers.js';
+import { getServerInstructions, normalizeBoolean } from './utils/helpers.js';
 import { parseSpecSecurely } from './utils/parser-security.js';
-import { extractToolsFromApi } from './parser/extract-tools.js';
+import { extractToolsFromApi, filterTools } from './parser/extract-tools.js';
 import { determineBaseUrl } from './utils/url.js';
 import pkg from '../package.json' with { type: 'json' };
 
 // Export programmatic API
-export { getToolsFromOpenApi, McpToolDefinition, GetToolsOptions } from './api.js';
+export {
+  getToolsFromOpenApi,
+  McpToolDefinition,
+  McpToolAnnotations,
+  GetToolsOptions,
+} from './api.js';
+
+/** Parses a comma-separated CLI list, dropping blanks. */
+function parseList(value: string): string[] {
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 // Configure CLI
 const program = new Command();
@@ -141,6 +152,30 @@ program
     '--oauth-creds-in-body',
     'Send OAuth2 client credentials in the token request body instead of the Basic Authorization header. Default: false.'
   )
+  .option(
+    '--include-tags <tags>',
+    'Comma-separated tags: generate only operations with one of them (case-insensitive). Applied after x-mcp filtering.',
+    parseList
+  )
+  .option(
+    '--exclude-tags <tags>',
+    'Comma-separated tags: skip operations with any of them (case-insensitive). Exclusions win over inclusions.',
+    parseList
+  )
+  .option(
+    '--include-operations <ids>',
+    'Comma-separated operationIds or tool names: generate only these operations (combined with --include-tags as a union).',
+    parseList
+  )
+  .option(
+    '--exclude-operations <ids>',
+    'Comma-separated operationIds or tool names to skip. Exclusions win over inclusions.',
+    parseList
+  )
+  .option(
+    '--output-schema',
+    "Declare each tool's outputSchema from its first 2xx application/json response schema (object schemas only) and return a tool error when a response does not match it. Default: false."
+  )
   .option('--force', 'Overwrite existing files without prompting')
   .version(pkg.version) // Match package.json version
   .action((options) => {
@@ -235,9 +270,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
   const packageJsonPath = path.join(outputDir, 'package.json');
   const tsconfigPath = path.join(outputDir, 'tsconfig.json');
   const gitignorePath = path.join(outputDir, '.gitignore');
-  const eslintPath = path.join(outputDir, '.eslintrc.json');
   const prettierPath = path.join(outputDir, '.prettierrc');
-  const jestConfigPath = path.join(outputDir, 'jest.config.js');
   const envExamplePath = path.join(outputDir, '.env.example');
   const docsDir = path.join(outputDir, 'docs');
   const oauth2DocsPath = path.join(docsDir, 'oauth2-configuration.md');
@@ -319,10 +352,9 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       }
 
       console.error('Generating Cloudflare Worker project...');
-      const tools = extractToolsFromApi(
-        api,
-        options.defaultInclude ?? true,
-        options.maxToolNameLength ?? 64
+      const tools = filterTools(
+        extractToolsFromApi(api, options.defaultInclude ?? true, options.maxToolNameLength ?? 64),
+        options
       );
       const resolvedBaseUrl = determineBaseUrl(api, options.baseUrl) || '';
       // Workers' fetch needs an absolute upstream URL.
@@ -331,13 +363,15 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       // - A relative base URL (e.g. the spec's server is "/api/v3"): still
       //   deployable once the user sets an absolute API_BASE_URL, so warn but
       //   proceed (and the generated Worker guards it at runtime too).
-      if (!resolvedBaseUrl) {
+      const everyToolHasAbsoluteServer =
+        tools.length > 0 && tools.every((t) => /^https?:\/\//i.test(t.serverUrl ?? ''));
+      if (!resolvedBaseUrl && !everyToolHasAbsoluteServer) {
         throw new Error(
           'Unable to determine an API base URL for --transport cloudflare-worker. ' +
             'The spec has no usable `servers` entry — pass --base-url https://host/path.'
         );
       }
-      if (!/^https?:\/\//i.test(resolvedBaseUrl)) {
+      if (resolvedBaseUrl && !/^https?:\/\//i.test(resolvedBaseUrl)) {
         console.error(
           `Warning: the resolved API base URL "${resolvedBaseUrl}" is not absolute. ` +
             `The generated Worker needs an absolute upstream URL — pass --base-url ` +
@@ -353,6 +387,8 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         baseUrl: resolvedBaseUrl,
         inboundAuth,
         headerPassthrough: options.headerPassthrough,
+        instructions: getServerInstructions(api.info?.description),
+        outputSchema: Boolean(options.outputSchema),
       });
 
       // Each file's parent directory is created per-iteration below, so no
@@ -398,14 +434,8 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     console.error('Generating .gitignore...');
     const gitignoreContent = generateGitignore();
 
-    console.error('Generating ESLint config...');
-    const eslintConfigContent = generateEslintConfig();
-
     console.error('Generating Prettier config...');
     const prettierConfigContent = generatePrettierConfig();
-
-    console.error('Generating Jest config...');
-    const jestConfigContent = generateJestConfig();
 
     console.error('Generating .env.example file...');
     const envExampleContent = generateEnvExample(api.components?.securitySchemes, {
@@ -446,14 +476,8 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     await fs.writeFile(gitignorePath, gitignoreContent);
     console.error(` -> Created ${gitignorePath}`);
 
-    await fs.writeFile(eslintPath, eslintConfigContent);
-    console.error(` -> Created ${eslintPath}`);
-
     await fs.writeFile(prettierPath, prettierConfigContent);
     console.error(` -> Created ${prettierPath}`);
-
-    await fs.writeFile(jestConfigPath, jestConfigContent);
-    console.error(` -> Created ${jestConfigPath}`);
 
     await fs.writeFile(envExamplePath, envExampleContent);
     console.error(` -> Created ${envExamplePath}`);

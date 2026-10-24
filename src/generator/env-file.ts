@@ -72,6 +72,12 @@ API_BASE_URL=your_api_base_url_here
         content += `${getEnvVarName(name, 'OPENID_TOKEN')}=your_openid_token_here\n`;
       }
     }
+    content += `
+# A tool whose operation requires credentials that are not configured fails with
+# an error naming the variables to set, without calling the API. Set to true to
+# send such requests without upstream credentials instead (the 4.x behavior).
+MCP_ALLOW_MISSING_CREDENTIALS=
+`;
   } else {
     content += `# No API authentication required\n`;
   }
@@ -89,36 +95,4 @@ MCP_PLAYGROUND=
   content += `\n# Add any other environment variables your API might need\n`;
 
   return content;
-}
-
-/**
- * Generates dotenv configuration code for the MCP server
- *
- * @returns Code for loading environment variables
- */
-export function generateDotenvConfig(): string {
-  return `
-/**
- * Load environment variables from .env file
- */
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Load environment variables from .env file
-const result = dotenv.config({ path: path.resolve(__dirname, '../.env') });
-
-if (result.error) {
-  console.warn('Warning: No .env file found or error loading .env file.');
-  console.warn('Using default environment variables.');
-}
-
-export const config = {
-  port: process.env.PORT || '3000',
-  logLevel: process.env.LOG_LEVEL || 'info',
-};
-`;
 }

@@ -1,11 +1,15 @@
 import { OpenAPIV3 } from 'openapi-types';
 import { CliOptions } from '../types/index.js';
-import { extractToolsFromApi } from '../parser/extract-tools.js';
+import { extractToolsFromApi, filterTools } from '../parser/extract-tools.js';
 import { determineBaseUrl } from '../utils/index.js';
+import { getServerInstructions } from '../utils/helpers.js';
 import {
   generateToolDefinitionMap,
   generateCallToolHandler,
   generateListToolsHandler,
+  generateSchemaValidationCode,
+  generateServerUrlResolutionCode,
+  withoutOutputSchemas,
 } from '../utils/code-gen.js';
 import {
   generateExecuteApiToolFunction,
@@ -30,14 +34,24 @@ export function generateMcpServerCode(
   serverVersion: string
 ): string {
   // Extract tools from API
-  const tools = extractToolsFromApi(
-    api,
-    options.defaultInclude ?? true,
-    options.maxToolNameLength ?? 64
+  const extracted = filterTools(
+    extractToolsFromApi(api, options.defaultInclude ?? true, options.maxToolNameLength ?? 64),
+    options
   );
+  // Output schemas are declared (and enforced) only with --output-schema.
+  const tools = options.outputSchema ? extracted : withoutOutputSchemas(extracted);
 
   // Determine base URL
   const determinedBaseUrl = determineBaseUrl(api, options.baseUrl);
+
+  // Server instructions for clients, from the spec's info.description (bounded).
+  const instructions = getServerInstructions(api.info?.description);
+  const instructionsDecl =
+    instructions !== undefined
+      ? `\n// Instructions sent to clients, from the OpenAPI info.description.\nexport const SERVER_INSTRUCTIONS = ${JSON.stringify(instructions)};`
+      : '';
+  const instructionsOption =
+    instructions !== undefined ? ', instructions: SERVER_INSTRUCTIONS' : '';
 
   // Security/execution generation options derived from CLI options
   const securityOptions: SecurityCodeOptions = {
@@ -45,6 +59,7 @@ export function generateMcpServerCode(
     oauthCredsInBody: options.oauthCredsInBody,
     headerPassthrough: options.headerPassthrough,
     customAuth: options.customAuth,
+    transport: options.transport,
   };
 
   // Generate code for tool definition map
@@ -148,14 +163,16 @@ main().catch((error) => {
  * Generated on: ${new Date().toISOString()}
  */
 
-// Load environment variables from .env file
-import dotenv from 'dotenv';
-dotenv.config();
+import { existsSync } from 'node:fs';
 
-import { Server, type Tool, type CallToolResult, type CallToolRequest } from "@modelcontextprotocol/server";${stdioImport}${transportImport}
+// Load environment variables from .env in the working directory, when present.
+// Node's built-in loader never overrides variables that are already set and,
+// unlike dotenv 17+, never writes to stdout (which would corrupt stdio servers).
+if (existsSync('.env')) process.loadEnvFile('.env');
 
-import { z, ZodError } from 'zod';
-import { jsonSchemaToZod } from 'json-schema-to-zod';
+import { Server, ProtocolError, ProtocolErrorCode, type Tool, type CallToolResult, type CallToolRequest } from "@modelcontextprotocol/server";${stdioImport}${transportImport}
+
+import { Validator, type OutputUnit } from '@cfworker/json-schema';
 import axios, { type AxiosRequestConfig, type AxiosError } from 'axios';
 ${securityModuleImports}${inboundHeaderStoreDecl}
 /**
@@ -168,22 +185,26 @@ type JsonObject = Record<string, any>;
  */
 interface McpToolDefinition {
     name: string;
+    title?: string;
     description: string;
     inputSchema: any;
     method: string;
     pathTemplate: string;
     executionParameters: { name: string, in: string }[];
     requestBodyContentType?: string;
+    serverUrl?: string;
     securityRequirements: any[];
     tags?: string[];
     deprecated?: boolean;
+    outputSchema?: any;
+    annotations: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
 }
 
 /**
  * Server configuration
  */
 export const SERVER_NAME = "${serverName}";
-export const SERVER_VERSION = "${serverVersion}";
+export const SERVER_VERSION = "${serverVersion}";${instructionsDecl}
 // Base URL for the API, can be set via environment variable or determined from OpenAPI spec
 export const API_BASE_URL = process.env.API_BASE_URL || "${determinedBaseUrl || ''}";
 console.error("API_BASE_URL is set to:", API_BASE_URL);
@@ -199,7 +220,7 @@ ${toolDefinitionMapCode}
  * Security schemes from the OpenAPI spec
  */
 const securitySchemes = ${JSON.stringify(api.components?.securitySchemes || {}, null, 2).replace(/^/gm, '  ')};
-
+${generateSchemaValidationCode()}${generateServerUrlResolutionCode()}
 /**
  * Creates a fresh MCP server instance with the tool handlers registered.
  * Transports call this once per request, connection or era probe: an SDK server
@@ -209,7 +230,7 @@ const securitySchemes = ${JSON.stringify(api.components?.securitySchemes || {}, 
 export function createServer(): Server {
   const server = new Server(
       { name: SERVER_NAME, version: SERVER_VERSION },
-      { capabilities: { tools: {} } }
+      { capabilities: { tools: {} }${instructionsOption} }
   );
 ${listToolsHandlerCode}
 ${callToolHandlerCode}
@@ -258,30 +279,6 @@ function formatApiError(error: AxiosError): string {
         message += \`API Request Setup Error: \${error.message}\`; 
     }
     return message;
-}
-
-/**
- * Converts a JSON Schema to a Zod schema for runtime validation
- * 
- * @param jsonSchema JSON Schema
- * @param toolName Tool name for error reporting
- * @returns Zod schema
- */
-function getZodSchemaFromJsonSchema(jsonSchema: any, toolName: string): z.ZodTypeAny {
-    if (typeof jsonSchema !== 'object' || jsonSchema === null) { 
-        return z.object({}).passthrough(); 
-    }
-    try {
-        const zodSchemaString = jsonSchemaToZod(jsonSchema);
-        const zodSchema = eval(zodSchemaString);
-        if (typeof zodSchema?.parse !== 'function') { 
-            throw new Error('Eval did not produce a valid Zod schema.'); 
-        }
-        return zodSchema as z.ZodTypeAny;
-    } catch (err: any) {
-        console.error(\`Failed to generate/evaluate Zod schema for '\${toolName}':\`, err);
-        return z.object({}).passthrough();
-    }
 }
 `;
 }

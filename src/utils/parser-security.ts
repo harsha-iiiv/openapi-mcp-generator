@@ -22,6 +22,30 @@ export class ExternalRefError extends Error {
   }
 }
 
+/** Error thrown when the input is a Swagger 2.0 document instead of OpenAPI 3.x. */
+export class UnsupportedSwaggerError extends Error {
+  constructor() {
+    super(
+      'Swagger 2.0 is not supported. Convert it to OpenAPI 3 first, for example: ' +
+        'npx swagger2openapi swagger.json -o openapi.json'
+    );
+    this.name = 'UnsupportedSwaggerError';
+  }
+}
+
+/**
+ * Throws {@link UnsupportedSwaggerError} for a Swagger 2.0 document. Swagger 2.0
+ * describes request bodies, servers and security differently, so treating it as
+ * OpenAPI 3 would silently drop them from the generated tools.
+ */
+export function assertNotSwagger2(doc: unknown): void {
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return;
+  const record = doc as Record<string, unknown>;
+  if (record.swagger !== undefined && record.openapi === undefined) {
+    throw new UnsupportedSwaggerError();
+  }
+}
+
 /** Returns true if a `$ref` string points at an http(s) URL. */
 export function isExternalHttpRef(ref: unknown): ref is string {
   return typeof ref === 'string' && /^https?:\/\//i.test(ref.trim());
@@ -110,13 +134,14 @@ export async function parseSpecSecurely(
   // SwaggerParser accepts a path/URL string OR a pre-parsed API object.
   const apiInput = input as Parameters<typeof SwaggerParser.dereference>[0];
 
+  // 1. Parse/fetch the entry document (http allowed so a URL input still loads),
+  //    without dereferencing, so we can inspect the version and raw $ref values first.
+  const parsed = (await SwaggerParser.parse(apiInput)) as OpenAPIV3.Document;
+  assertNotSwagger2(parsed);
+
   if (allowExternalRefs) {
     return (await SwaggerParser.dereference(apiInput)) as OpenAPIV3.Document;
   }
-
-  // 1. Parse/fetch the entry document (http allowed so a URL input still loads),
-  //    without dereferencing, so we can inspect raw $ref values first.
-  const parsed = (await SwaggerParser.parse(apiInput)) as OpenAPIV3.Document;
 
   // 2. Reject any external http(s) $ref embedded in the spec (SSRF guard).
   assertNoExternalRefs(parsed);

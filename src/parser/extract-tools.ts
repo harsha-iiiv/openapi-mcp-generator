@@ -5,8 +5,9 @@ import { OpenAPIV3 } from 'openapi-types';
 import type { JSONSchema7, JSONSchema7TypeName } from 'json-schema';
 import { createHash } from 'crypto';
 import { generateOperationId } from '../utils/code-gen.js';
-import { McpToolDefinition } from '../types/index.js';
+import { McpToolAnnotations, McpToolDefinition } from '../types/index.js';
 import { shouldIncludeOperationForMcp } from '../utils/helpers.js';
+import { normalizeUrl, resolveServerUrl } from '../utils/url.js';
 
 /** Default maximum tool name length (Claude Desktop limit). */
 export const DEFAULT_MAX_TOOL_NAME_LENGTH = 64;
@@ -129,6 +130,105 @@ export function truncateToolName(name: string, maxLength: number): string {
   return `${head}${ELISION_MARKER}${tail}${hashSuffix}`.slice(0, maxLength);
 }
 
+/** The boolean hints `x-mcp-annotations` may override. */
+const ANNOTATION_HINTS = [
+  'readOnlyHint',
+  'destructiveHint',
+  'idempotentHint',
+  'openWorldHint',
+] as const;
+
+/**
+ * MCP tool annotations for an operation: defaults from the HTTP method's
+ * semantics (RFC 9110 safe and idempotent methods), then any boolean hints from
+ * the operation's `x-mcp-annotations` object.
+ */
+export function getToolAnnotations(method: string, operation: object): McpToolAnnotations {
+  let annotations: McpToolAnnotations;
+  switch (method.toLowerCase()) {
+    case 'get':
+    case 'head':
+    case 'options':
+    case 'trace':
+      annotations = { readOnlyHint: true, openWorldHint: true };
+      break;
+    case 'put':
+    case 'delete':
+      annotations = {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      };
+      break;
+    case 'patch':
+      annotations = {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      };
+      break;
+    default: // post and anything unknown
+      annotations = {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      };
+  }
+  const overrides = (operation as Record<string, unknown>)['x-mcp-annotations'];
+  if (overrides !== undefined) {
+    if (overrides === null || typeof overrides !== 'object' || Array.isArray(overrides)) {
+      console.warn(
+        `Ignoring x-mcp-annotations: expected an object, got ${JSON.stringify(overrides)}.`
+      );
+    } else {
+      for (const [key, value] of Object.entries(overrides)) {
+        if ((ANNOTATION_HINTS as readonly string[]).includes(key) && typeof value === 'boolean') {
+          annotations[key as (typeof ANNOTATION_HINTS)[number]] = value;
+        } else {
+          console.warn(
+            `Ignoring x-mcp-annotations.${key}: expected one of ${ANNOTATION_HINTS.join(', ')} with a boolean value.`
+          );
+        }
+      }
+    }
+  }
+  return annotations;
+}
+
+/**
+ * Output schema for an operation: the schema of its first (lowest) 2xx response
+ * with `application/json` content, mapped as a response (writeOnly properties
+ * dropped). Only object schemas qualify, because MCP structured content is a
+ * JSON object.
+ */
+export function getOutputSchema(operation: OpenAPIV3.OperationObject): JSONSchema7 | undefined {
+  for (const [status, responseOrRef] of Object.entries(operation.responses ?? {})) {
+    if (!/^2(\d\d|XX)$/i.test(status)) continue;
+    const response = responseOrRef as OpenAPIV3.ResponseObject;
+    const mediaType = Object.entries(response?.content ?? {}).find(([type]) =>
+      /^application\/json\b/i.test(type)
+    )?.[1];
+    if (!mediaType?.schema) continue;
+    const mapped = mapOpenApiSchemaToJsonSchema(mediaType.schema, { direction: 'response' });
+    return typeof mapped === 'object' && mapped.type === 'object' ? mapped : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Display title for an operation: `x-mcp-title`, else the trimmed summary.
+ */
+export function getToolTitle(operation: object): string | undefined {
+  const record = operation as Record<string, unknown>;
+  for (const candidate of [record['x-mcp-title'], record.summary]) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
 /**
  * Extracts tool definitions from an OpenAPI document
  *
@@ -248,8 +348,15 @@ export function extractToolsFromApi(
       const deprecated = operation.deprecated === true;
 
       // Create the tool definition
+      // Operation servers win over path-item servers; the root server is the default base URL.
+      const server = operation.servers?.[0] ?? pathItem.servers?.[0];
+      const serverUrl = server?.url ? normalizeUrl(resolveServerUrl(server)) : undefined;
+
+      const title = getToolTitle(operation);
+      const outputSchema = getOutputSchema(operation);
       tools.push({
         name: finalToolName,
+        ...(title !== undefined && { title }),
         description,
         inputSchema,
         method,
@@ -258,9 +365,12 @@ export function extractToolsFromApi(
         executionParameters,
         requestBodyContentType,
         securityRequirements,
+        ...(serverUrl !== undefined && { serverUrl }),
         operationId: originalOperationId,
         tags,
         deprecated,
+        annotations: getToolAnnotations(method, operation),
+        ...(outputSchema !== undefined && { outputSchema }),
       });
     }
   }
@@ -315,7 +425,9 @@ export function generateInputSchemaAndDetails(
   allParameters.forEach((param) => {
     if (!param.name || !param.schema) return;
 
-    const paramSchema = mapOpenApiSchemaToJsonSchema(param.schema as OpenAPIV3.SchemaObject);
+    const paramSchema = mapOpenApiSchemaToJsonSchema(param.schema as OpenAPIV3.SchemaObject, {
+      direction: 'request',
+    });
     if (typeof paramSchema === 'object') {
       paramSchema.description = param.description || paramSchema.description;
     }
@@ -336,7 +448,12 @@ export function generateInputSchemaAndDetails(
 
     if (jsonContent?.schema) {
       requestBodyContentType = 'application/json';
-      const bodySchema = mapOpenApiSchemaToJsonSchema(jsonContent.schema as OpenAPIV3.SchemaObject);
+      const bodySchema = mapOpenApiSchemaToJsonSchema(
+        jsonContent.schema as OpenAPIV3.SchemaObject,
+        {
+          direction: 'request',
+        }
+      );
 
       if (typeof bodySchema === 'object') {
         bodySchema.description =
@@ -408,16 +525,34 @@ function normalizeExclusiveBound(schema: Record<string, any>, bound: 'minimum' |
   }
 }
 
+/** Options for {@link mapOpenApiSchemaToJsonSchema}. */
+export interface MapSchemaOptions {
+  /**
+   * Which side of the exchange the schema describes. 'request' drops properties
+   * marked `readOnly: true` (the API ignores or rejects them in requests);
+   * 'response' drops properties marked `writeOnly: true` (the API never returns
+   * them). Omitted: properties are kept.
+   */
+  direction?: 'request' | 'response';
+}
+
 /**
- * Maps an OpenAPI schema to JSON Schema, recursing into every subschema
- * (properties, items, composition keywords, additionalProperties, ...).
+ * Maps an OpenAPI schema to JSON Schema (2020-12), recursing into every
+ * subschema (properties, items, composition keywords, additionalProperties, ...).
+ *
+ * Types (including `integer`), `format`, `pattern`, enums and composition
+ * keywords are kept as written. OpenAPI-only keywords are removed, `nullable`
+ * becomes a `null` type, a 3.0 boolean exclusive bound becomes a numeric one and
+ * a single `example` becomes `examples: [example]`.
  *
  * @param schema OpenAPI schema object or reference
+ * @param options Mapping options (request/response direction)
  * @param seen Schemas on the current recursion path, used to break cycles
  * @returns JSON Schema representation
  */
 export function mapOpenApiSchemaToJsonSchema(
   schema: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject,
+  options: MapSchemaOptions = {},
   seen: WeakSet<object> = new WeakSet()
 ): JSONSchema7 | boolean {
   // Handle boolean schemas
@@ -446,8 +581,11 @@ export function mapOpenApiSchemaToJsonSchema(
     normalizeExclusiveBound(jsonSchema, 'minimum');
     normalizeExclusiveBound(jsonSchema, 'maximum');
 
-    // Convert integer type to number (JSON Schema compatible)
-    if (schema.type === 'integer') jsonSchema.type = 'number';
+    // OpenAPI's single `example` is JSON Schema's `examples` array.
+    if (!Array.isArray(jsonSchema.examples)) {
+      if (jsonSchema.example !== undefined) jsonSchema.examples = [jsonSchema.example];
+      else delete jsonSchema.examples;
+    }
 
     // Remove OpenAPI-specific properties that aren't in JSON Schema
     delete jsonSchema.nullable;
@@ -471,8 +609,39 @@ export function mapOpenApiSchemaToJsonSchema(
 
     const mapChild = (child: unknown): unknown =>
       child !== null && typeof child === 'object' && !Array.isArray(child)
-        ? mapOpenApiSchemaToJsonSchema(child as OpenAPIV3.SchemaObject, seen)
+        ? mapOpenApiSchemaToJsonSchema(child as OpenAPIV3.SchemaObject, options, seen)
         : child;
+
+    // Drop properties this direction never carries: readOnly ones from requests,
+    // writeOnly ones from responses (and from `required`, so it stays satisfiable).
+    const hiddenKeyword =
+      options.direction === 'request'
+        ? 'readOnly'
+        : options.direction === 'response'
+          ? 'writeOnly'
+          : undefined;
+    const properties = jsonSchema.properties;
+    if (
+      hiddenKeyword &&
+      properties !== null &&
+      typeof properties === 'object' &&
+      !Array.isArray(properties)
+    ) {
+      const hidden = Object.keys(properties).filter((name) => {
+        const child = properties[name];
+        return child !== null && typeof child === 'object' && child[hiddenKeyword] === true;
+      });
+      if (hidden.length > 0) {
+        jsonSchema.properties = Object.fromEntries(
+          Object.entries(properties).filter(([name]) => !hidden.includes(name))
+        );
+        if (Array.isArray(jsonSchema.required)) {
+          const required = jsonSchema.required.filter((name: string) => !hidden.includes(name));
+          if (required.length > 0) jsonSchema.required = required;
+          else delete jsonSchema.required;
+        }
+      }
+    }
 
     for (const keyword of SINGLE_SCHEMA_KEYWORDS) {
       if (keyword in jsonSchema) jsonSchema[keyword] = mapChild(jsonSchema[keyword]);
@@ -499,4 +668,72 @@ export function mapOpenApiSchemaToJsonSchema(
   } finally {
     seen.delete(schema);
   }
+}
+
+/** Tag and operation filters applied after x-mcp filtering. */
+export interface ToolFilterOptions {
+  /** Keep only tools with at least one of these tags (case-insensitive). */
+  includeTags?: string[];
+  /** Drop tools with any of these tags (case-insensitive). */
+  excludeTags?: string[];
+  /** Keep only these operations (operationId or generated tool name). */
+  includeOperations?: string[];
+  /** Drop these operations (operationId or generated tool name). */
+  excludeOperations?: string[];
+}
+
+/**
+ * Applies tag and operation filters. When any include list is given, a tool is
+ * kept if it matches one of them (a listed tag or a listed operation); every
+ * exclusion then removes matching tools, so exclusions win over inclusions.
+ * Filter values that match no tool are reported with a warning.
+ */
+export function filterTools(
+  tools: McpToolDefinition[],
+  filters: ToolFilterOptions = {}
+): McpToolDefinition[] {
+  const clean = (values?: string[]) =>
+    (Array.isArray(values) ? values : []).map((v) => v.trim()).filter(Boolean);
+  const includeTags = clean(filters.includeTags).map((t) => t.toLowerCase());
+  const excludeTags = clean(filters.excludeTags).map((t) => t.toLowerCase());
+  const includeOperations = clean(filters.includeOperations);
+  const excludeOperations = clean(filters.excludeOperations);
+  if (
+    includeTags.length +
+      excludeTags.length +
+      includeOperations.length +
+      excludeOperations.length ===
+    0
+  ) {
+    return tools;
+  }
+
+  const tagsOf = (tool: McpToolDefinition) => (tool.tags ?? []).map((t) => t.toLowerCase());
+  const isOperation = (tool: McpToolDefinition, value: string) =>
+    tool.operationId === value || tool.name === value;
+  const warnUnmatched = (flag: string, values: string[], matches: (value: string) => boolean) => {
+    for (const value of values) {
+      if (!matches(value)) console.warn(`Warning: ${flag} '${value}' matches no operation.`);
+    }
+  };
+  warnUnmatched('--include-tags', includeTags, (tag) => tools.some((t) => tagsOf(t).includes(tag)));
+  warnUnmatched('--exclude-tags', excludeTags, (tag) => tools.some((t) => tagsOf(t).includes(tag)));
+  warnUnmatched('--include-operations', includeOperations, (op) =>
+    tools.some((t) => isOperation(t, op))
+  );
+  warnUnmatched('--exclude-operations', excludeOperations, (op) =>
+    tools.some((t) => isOperation(t, op))
+  );
+
+  const hasIncludes = includeTags.length > 0 || includeOperations.length > 0;
+  return tools.filter((tool) => {
+    const tags = tagsOf(tool);
+    if (excludeTags.some((tag) => tags.includes(tag))) return false;
+    if (excludeOperations.some((op) => isOperation(tool, op))) return false;
+    if (!hasIncludes) return true;
+    return (
+      includeTags.some((tag) => tags.includes(tag)) ||
+      includeOperations.some((op) => isOperation(tool, op))
+    );
+  });
 }

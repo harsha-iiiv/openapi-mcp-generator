@@ -38,7 +38,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { streamSSE } from 'hono/streaming';
-import { v4 as uuid } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import {
   isJSONRPCErrorResponse,
   isJSONRPCNotification,
@@ -67,7 +67,7 @@ onerror?: (error: Error) => void;
 onmessage?: (message: JSONRPCMessage) => void;
 
 constructor(messageUrl: string, stream: SSEStreamingApi) {
-  this._sessionId = uuid();
+  this._sessionId = randomUUID();
   this.stream = stream;
   this.messageUrl = messageUrl;
   

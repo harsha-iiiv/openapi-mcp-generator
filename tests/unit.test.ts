@@ -3,15 +3,17 @@
  * Run with: npm test
  */
 import { describe, it, expect } from 'vitest';
+import { resolveServerUrl } from '../src/utils/url.js';
 import { fileURLToPath } from 'node:url';
 import { OpenAPIV3 } from 'openapi-types';
 
-import { sanitizeForTemplate } from '../src/utils/helpers.js';
+import { getServerInstructions, sanitizeForTemplate } from '../src/utils/helpers.js';
 import {
   assertNoExternalRefs,
   isExternalHttpRef,
   ExternalRefError,
   parseSpecSecurely,
+  UnsupportedSwaggerError,
 } from '../src/utils/parser-security.js';
 import {
   extractToolsFromApi,
@@ -20,6 +22,10 @@ import {
   abbreviateToolName,
   splitNameIntoWords,
   mapOpenApiSchemaToJsonSchema,
+  getToolAnnotations,
+  getToolTitle,
+  filterTools,
+  getOutputSchema,
 } from '../src/parser/extract-tools.js';
 import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
 import {
@@ -32,6 +38,8 @@ import {
 import { generateMcpServerCode, generateCustomAuthStub } from '../src/generator/server-code.js';
 import { generateCloudflareWorkerFiles } from '../src/generator/cloudflare-worker.js';
 import { getToolsFromOpenApi } from '../src/api.js';
+import { generatePackageJson } from '../src/generator/package-json.js';
+import rootPackageJson from '../package.json' with { type: 'json' };
 import type { McpToolDefinition } from '../src/types/index.js';
 
 // --- #67: template-literal injection ---------------------------------------
@@ -157,6 +165,464 @@ describe('#68 external $ref SSRF guard', () => {
   });
 });
 
+// --- JSON Schema fidelity --------------------------------------------------------
+
+describe('JSON Schema fidelity of input schemas', () => {
+  it('keeps integer types, including nullable integers', () => {
+    expect(mapOpenApiSchemaToJsonSchema({ type: 'integer', format: 'int64' })).toEqual({
+      type: 'integer',
+      format: 'int64',
+    });
+    expect(
+      mapOpenApiSchemaToJsonSchema({ type: 'integer', nullable: true } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: ['integer', 'null'] });
+  });
+
+  it('turns example into examples, keeping an existing examples array', () => {
+    expect(mapOpenApiSchemaToJsonSchema({ type: 'string', example: 'rex' })).toEqual({
+      type: 'string',
+      examples: ['rex'],
+    });
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'string',
+        example: 'ignored',
+        examples: ['a', 'b'],
+      } as unknown as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'string', examples: ['a', 'b'] });
+    // An example of `false` or `null` is still an example.
+    expect(mapOpenApiSchemaToJsonSchema({ type: 'boolean', example: false })).toEqual({
+      type: 'boolean',
+      examples: [false],
+    });
+  });
+
+  it('keeps format, pattern, enums and composition keywords as written', () => {
+    const source = {
+      type: 'object',
+      properties: {
+        email: { type: 'string', format: 'email', pattern: '^.+@.+$' },
+        status: { type: 'string', enum: ['a', 'b'] },
+        either: { oneOf: [{ type: 'integer' }, { type: 'string', format: 'uuid' }] },
+        both: { allOf: [{ type: 'object' }], anyOf: [{ required: ['x'] }] },
+      },
+    } as unknown as OpenAPIV3.SchemaObject;
+    expect(mapOpenApiSchemaToJsonSchema(source)).toEqual(source);
+  });
+
+  const petApi = {
+    openapi: '3.0.3',
+    info: { title: 'pets', version: '1' },
+    paths: {
+      '/pets': {
+        post: {
+          operationId: 'createPet',
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['id', 'name'],
+                  properties: {
+                    id: { type: 'integer', readOnly: true },
+                    name: { type: 'string' },
+                    password: { type: 'string', writeOnly: true },
+                    owner: {
+                      type: 'object',
+                      required: ['createdAt'],
+                      properties: {
+                        createdAt: { type: 'string', format: 'date-time', readOnly: true },
+                        email: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: { '200': { description: 'ok' } },
+        },
+      },
+    },
+  } as unknown as OpenAPIV3.Document;
+
+  it('drops readOnly properties from request input schemas, and from required', () => {
+    const [tool] = extractToolsFromApi(petApi);
+    const body = (tool.inputSchema as any).properties.requestBody;
+    expect(Object.keys(body.properties)).toEqual(['name', 'password', 'owner']);
+    expect(body.required).toEqual(['name']);
+    expect(Object.keys(body.properties.owner.properties)).toEqual(['email']);
+    expect(body.properties.owner.required).toBeUndefined();
+  });
+
+  it('drops writeOnly properties when mapping a response schema', () => {
+    const schema = (petApi.paths['/pets'] as any).post.requestBody.content['application/json']
+      .schema;
+    const mapped = mapOpenApiSchemaToJsonSchema(schema, { direction: 'response' }) as any;
+    expect(Object.keys(mapped.properties)).toEqual(['id', 'name', 'owner']);
+    expect(mapped.required).toEqual(['id', 'name']);
+    // Without a direction nothing is dropped.
+    const neutral = mapOpenApiSchemaToJsonSchema(schema) as any;
+    expect(Object.keys(neutral.properties)).toEqual(['id', 'name', 'password', 'owner']);
+  });
+});
+
+// --- per-operation servers (#73) -------------------------------------------------
+
+describe('#73 operation and path-item servers', () => {
+  const api = {
+    openapi: '3.0.3',
+    info: { title: 't', version: '1' },
+    servers: [{ url: 'https://{env}.example.com/api/', variables: { env: { default: 'prod' } } }],
+    paths: {
+      '/a': {
+        servers: [{ url: 'https://path.example.com' }, { url: 'https://ignored.example.com' }],
+        get: { operationId: 'pathLevel', responses: { '200': { description: 'ok' } } },
+        post: {
+          operationId: 'operationLevel',
+          servers: [
+            { url: '/v{major}/', variables: { major: { default: '2' } } },
+            { url: 'https://ignored.example.com' },
+          ],
+          responses: { '200': { description: 'ok' } },
+        },
+      },
+      '/b': { get: { operationId: 'rootLevel', responses: { '200': { description: 'ok' } } } },
+    },
+  } as unknown as OpenAPIV3.Document;
+
+  it('records operation > path-item servers with variables resolved; root stays the base URL', async () => {
+    const tools = await getToolsFromOpenApi(api);
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.operationLevel.serverUrl).toBe('/v2');
+    expect(byName.pathLevel.serverUrl).toBe('https://path.example.com');
+    expect(byName.rootLevel.serverUrl).toBeUndefined();
+    expect((byName.rootLevel as any).baseUrl).toBe('https://prod.example.com/api');
+    expect(generateToolDefinitionMap(tools)).toContain('serverUrl: "/v2",');
+  });
+});
+
+// --- tag and operation filters --------------------------------------------------
+
+describe('tag and operation filters', () => {
+  const op = (operationId: string, tags: string[], extra: object = {}) => ({
+    operationId,
+    tags,
+    responses: { '200': { description: 'ok' } },
+    ...extra,
+  });
+  const api = {
+    openapi: '3.0.3',
+    info: { title: 't', version: '1' },
+    paths: {
+      '/pets': { get: op('listPets', ['Pets']), post: op('createPet', ['pets', 'Admin']) },
+      '/stores': { get: op('list.stores', ['Stores']) },
+      '/users': { get: op('listUsers', ['Users'], { 'x-mcp': false }) },
+      '/health': { get: op('health', []) },
+    },
+  } as unknown as OpenAPIV3.Document;
+  const names = (filters: Parameters<typeof filterTools>[1]) =>
+    filterTools(extractToolsFromApi(api), filters).map((t) => t.name);
+
+  it('keeps everything without filters (after x-mcp)', () => {
+    expect(names({})).toEqual(['listPets', 'createPet', 'list_stores', 'health']);
+  });
+
+  it('includes by tag case-insensitively and by operationId or tool name', () => {
+    expect(names({ includeTags: ['PETS'] })).toEqual(['listPets', 'createPet']);
+    expect(names({ includeOperations: ['list.stores'] })).toEqual(['list_stores']);
+    expect(names({ includeOperations: ['list_stores', 'health'] })).toEqual([
+      'list_stores',
+      'health',
+    ]);
+    // Include lists combine as a union.
+    expect(names({ includeTags: ['stores'], includeOperations: ['health'] })).toEqual([
+      'list_stores',
+      'health',
+    ]);
+  });
+
+  it('lets exclusions win over inclusions', () => {
+    expect(names({ includeTags: ['pets'], excludeTags: ['admin'] })).toEqual(['listPets']);
+    expect(names({ includeTags: ['pets'], excludeOperations: ['listPets'] })).toEqual([
+      'createPet',
+    ]);
+    expect(names({ excludeTags: ['Pets', 'stores'] })).toEqual(['health']);
+  });
+
+  it('never resurrects operations excluded by x-mcp', () => {
+    expect(names({ includeTags: ['users'] })).toEqual([]);
+  });
+
+  it('applies the same filters through the programmatic API', async () => {
+    const tools = await getToolsFromOpenApi(api, { includeTags: ['pets'], excludeTags: ['admin'] });
+    expect(tools.map((t) => t.name)).toEqual(['listPets']);
+  });
+});
+
+// --- output schemas -------------------------------------------------------------
+
+describe('output schemas', () => {
+  const schema = { type: 'object', properties: { id: { type: 'integer' } } };
+  it('takes the lowest 2xx response with JSON content, objects only', () => {
+    expect(
+      getOutputSchema({
+        responses: {
+          '400': { description: 'bad', content: { 'application/json': { schema } } },
+          '202': {
+            description: 'later',
+            content: { 'application/json': { schema: { type: 'string' } } },
+          },
+          '201': {
+            description: 'created',
+            content: { 'application/json; charset=utf-8': { schema } },
+          },
+          '200': { description: 'no body' },
+        },
+      } as unknown as OpenAPIV3.OperationObject)
+    ).toEqual(schema);
+    expect(
+      getOutputSchema({
+        responses: {
+          '201': { description: 'created', content: { 'application/json': { schema } } },
+          '200': {
+            description: 'ok',
+            content: { 'application/json': { schema: { type: 'string' } } },
+          },
+        },
+      } as unknown as OpenAPIV3.OperationObject)
+    ).toBeUndefined();
+    expect(
+      getOutputSchema({
+        responses: {
+          '2XX': {
+            description: 'ok',
+            content: { 'application/json': { schema: { type: 'array' } } },
+          },
+        },
+      } as unknown as OpenAPIV3.OperationObject)
+    ).toBeUndefined();
+    expect(
+      getOutputSchema({
+        responses: { default: { description: 'ok', content: { 'application/json': { schema } } } },
+      } as unknown as OpenAPIV3.OperationObject)
+    ).toBeUndefined();
+  });
+
+  it('is emitted into generated servers only with --output-schema', () => {
+    const api = {
+      openapi: '3.0.3',
+      info: { title: 't', version: '1' },
+      paths: {
+        '/x': {
+          get: {
+            operationId: 'getX',
+            responses: {
+              '200': { description: 'ok', content: { 'application/json': { schema } } },
+            },
+          },
+        },
+      },
+    } as unknown as OpenAPIV3.Document;
+    const opts = { input: 'x', output: 'y' };
+    expect(generateMcpServerCode(api, opts, 't', '1')).not.toContain('outputSchema: {');
+    expect(generateMcpServerCode(api, { ...opts, outputSchema: true }, 't', '1')).toContain(
+      'outputSchema: {"type":"object","properties":{"id":{"type":"integer"}}}'
+    );
+    const worker = (outputSchema: boolean) =>
+      generateCloudflareWorkerFiles({
+        tools: extractToolsFromApi(api),
+        serverName: 't',
+        serverVersion: '1',
+        securitySchemes: undefined,
+        baseUrl: 'https://api.example.com',
+        outputSchema,
+      }).find((f) => f.path === 'src/tools.ts')!.content;
+    expect(worker(false)).not.toContain('outputSchema: {');
+    expect(worker(true)).toContain('outputSchema: {');
+  });
+});
+
+// --- server instructions ------------------------------------------------------------
+
+describe('server instructions from info.description', () => {
+  it('trims, omits blanks and bounds the length to 2000 characters', () => {
+    expect(getServerInstructions('  Pets API  ')).toBe('Pets API');
+    expect(getServerInstructions('   ')).toBeUndefined();
+    expect(getServerInstructions(undefined)).toBeUndefined();
+    const long = getServerInstructions('x'.repeat(5000))!;
+    expect(long.length).toBe(2000);
+    expect(long.endsWith('…')).toBe(true);
+    expect(getServerInstructions('y'.repeat(2000))).toBe('y'.repeat(2000));
+  });
+
+  it('is emitted only when present', () => {
+    const base = {
+      openapi: '3.0.3',
+      paths: {},
+    } as unknown as OpenAPIV3.Document;
+    const withText = generateMcpServerCode(
+      { ...base, info: { title: 't', version: '1', description: 'Use `me` ${wisely}' } },
+      { input: 'x', output: 'y' },
+      't',
+      '1'
+    );
+    expect(withText).toContain('export const SERVER_INSTRUCTIONS = "Use `me` ${wisely}";');
+    expect(withText).toContain('instructions: SERVER_INSTRUCTIONS');
+    const without = generateMcpServerCode(
+      { ...base, info: { title: 't', version: '1' } },
+      { input: 'x', output: 'y' },
+      't',
+      '1'
+    );
+    expect(without).not.toContain('SERVER_INSTRUCTIONS');
+  });
+});
+
+// --- tool annotations and titles -----------------------------------------------
+
+describe('tool annotations and titles', () => {
+  it('derives annotations from the HTTP method', () => {
+    const readOnly = { readOnlyHint: true, openWorldHint: true };
+    for (const method of ['get', 'head', 'options']) {
+      expect(getToolAnnotations(method, {}), method).toEqual(readOnly);
+    }
+    expect(getToolAnnotations('post', {})).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+    expect(getToolAnnotations('put', {})).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+    expect(getToolAnnotations('patch', {})).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    });
+    expect(getToolAnnotations('delete', {})).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+  });
+
+  it('lets x-mcp-annotations override individual boolean hints only', () => {
+    expect(
+      getToolAnnotations('post', {
+        'x-mcp-annotations': {
+          idempotentHint: true,
+          openWorldHint: false,
+          other: true,
+          readOnlyHint: 'yes',
+        },
+      })
+    ).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+    expect(getToolAnnotations('get', { 'x-mcp-annotations': 'nope' })).toEqual({
+      readOnlyHint: true,
+      openWorldHint: true,
+    });
+  });
+
+  it('takes the title from x-mcp-title, else the trimmed summary, else none', () => {
+    expect(getToolTitle({ 'x-mcp-title': ' Find pets ', summary: 'Summary' })).toBe('Find pets');
+    expect(getToolTitle({ summary: '  List pets\n' })).toBe('List pets');
+    expect(getToolTitle({ summary: '   ' })).toBeUndefined();
+    expect(getToolTitle({})).toBeUndefined();
+  });
+
+  it('exposes title and annotations through the programmatic API and the generated map', async () => {
+    const api = {
+      openapi: '3.0.3',
+      info: { title: 't', version: '1' },
+      paths: {
+        '/a': {
+          get: {
+            operationId: 'listA',
+            summary: 'List A',
+            responses: { '200': { description: 'ok' } },
+          },
+          put: { operationId: 'putA', responses: { '200': { description: 'ok' } } },
+        },
+      },
+    } as OpenAPIV3.Document;
+    const tools = await getToolsFromOpenApi(api);
+    expect(tools.find((t) => t.name === 'listA')).toMatchObject({
+      title: 'List A',
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    });
+    const putA = tools.find((t) => t.name === 'putA')!;
+    expect(putA.title).toBeUndefined();
+    expect(putA.annotations?.destructiveHint).toBe(true);
+    const map = generateToolDefinitionMap(tools);
+    expect(map).toContain('title: "List A",');
+    expect(map).toContain('annotations: {"readOnlyHint":true,"openWorldHint":true}');
+  });
+});
+
+// --- Swagger 2.0 input ----------------------------------------------------------
+
+describe('Swagger 2.0 input fails loudly', () => {
+  const swagger = {
+    swagger: '2.0',
+    info: { title: 'legacy', version: '1' },
+    host: 'api.example.com',
+    paths: {
+      '/x': {
+        post: {
+          operationId: 'postX',
+          parameters: [{ in: 'body', name: 'body', schema: { type: 'object' } }],
+          responses: { '200': { description: 'ok' } },
+        },
+      },
+    },
+  };
+  const message =
+    'Swagger 2.0 is not supported. Convert it to OpenAPI 3 first, for example: ' +
+    'npx swagger2openapi swagger.json -o openapi.json';
+
+  it('parseSpecSecurely rejects it with and without external refs allowed', async () => {
+    for (const allow of [false, true]) {
+      await expect(
+        parseSpecSecurely(structuredClone(swagger) as never, allow)
+      ).rejects.toBeInstanceOf(UnsupportedSwaggerError);
+      await expect(parseSpecSecurely(structuredClone(swagger) as never, allow)).rejects.toThrow(
+        message
+      );
+    }
+  });
+
+  it('getToolsFromOpenApi rejects it whether or not it dereferences', async () => {
+    for (const dereference of [false, true]) {
+      await expect(
+        getToolsFromOpenApi(structuredClone(swagger) as never, { dereference })
+      ).rejects.toThrow(message);
+    }
+  });
+
+  it('still accepts OpenAPI 3 documents', async () => {
+    const tools = await getToolsFromOpenApi({
+      openapi: '3.0.3',
+      info: { title: 'ok', version: '1' },
+      paths: {
+        '/x': { get: { operationId: 'getX', responses: { '200': { description: 'ok' } } } },
+      },
+    } as OpenAPIV3.Document);
+    expect(tools.map((t) => t.name)).toEqual(['getX']);
+  });
+});
+
 // --- #4: tool name truncation ------------------------------------------------
 
 describe('#77 OpenAPI 3.0 exclusiveMinimum conversion', () => {
@@ -238,7 +704,7 @@ describe('#77 OpenAPI 3.0 exclusiveMinimum conversion', () => {
     const mapped = mapOpenApiSchemaToJsonSchema({
       allOf: [{ type: 'string', nullable: true, example: 'a' }],
     } as unknown as OpenAPIV3.SchemaObject) as any;
-    expect(mapped.allOf[0]).toEqual({ type: ['string', 'null'] });
+    expect(mapped.allOf[0]).toEqual({ type: ['string', 'null'], examples: ['a'] });
   });
 
   it('does not modify the source schema', () => {
@@ -555,6 +1021,16 @@ describe('opt-in security/execution options', () => {
     expect(generateExecuteApiToolFunction(undefined, {})).not.toContain('inboundHeaderStore');
   });
 
+  it('#82 names passthrough headers in missing-credential hints only on HTTP transports', () => {
+    const names = { headerPassthrough: ['X-API-Key'] };
+    expect(generateExecuteApiToolFunction({}, { ...names, transport: 'stdio' })).toContain(
+      'allSecuritySchemes, []);'
+    );
+    expect(
+      generateExecuteApiToolFunction({}, { ...names, transport: 'streamable-http' })
+    ).toContain('allSecuritySchemes, ["x-api-key"]);');
+  });
+
   it('#55 emits the AsyncLocalStorage import + store declaration when enabled', () => {
     const opts = { headerPassthrough: ['X-API-KEY'] };
     expect(getSecurityModuleImports(opts)).toContain("from 'async_hooks'");
@@ -727,9 +1203,8 @@ describe('cloudflare-worker target', () => {
     });
     const index = fileContent(files, 'src/index.ts');
 
-    expect(index).toContain(
-      "import { createMcpHandler, Server, type CallToolResult } from '@modelcontextprotocol/server'"
-    );
+    expect(index).toContain("from '@modelcontextprotocol/server'");
+    expect(index).toContain('createMcpHandler,');
     expect(index).toContain("const MCP_ROUTE = '/mcp'");
     // One handler per request serves MCP 2026-07-28 and 2025-era clients.
     expect(index).toContain(
@@ -744,7 +1219,7 @@ describe('cloudflare-worker target', () => {
     expect(index).not.toContain('x-api-key');
   });
 
-  it('emits src/tools.ts with embedded names + build-time zod and no eval', async () => {
+  it('emits src/tools.ts with embedded names, no zod and no eval', async () => {
     const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
     expect(tools.length).toBeGreaterThan(0);
     const files = generateCloudflareWorkerFiles({
@@ -758,9 +1233,16 @@ describe('cloudflare-worker target', () => {
 
     expect(toolsFile).toContain(JSON.stringify(tools[0].name));
     expect(toolsFile).toContain('export const toolDefinitionMap');
-    expect(toolsFile).toContain('export const toolZodShapes');
-    expect(toolsFile).toContain("import { z } from 'zod'");
+    expect(toolsFile).not.toContain('zod');
     expect(toolsFile).not.toMatch(/\beval\s*\(/);
+    // Arguments are validated against the JSON Schema at runtime instead.
+    const index = fileContent(files, 'src/index.ts');
+    expect(index).toContain("import { Validator, type OutputUnit } from '@cfworker/json-schema'");
+    expect(index).toContain('validateToolArguments(def.name, def.inputSchema, args)');
+    expect(index).not.toContain('zod');
+    const pkg = JSON.parse(fileContent(files, 'package.json'));
+    expect(pkg.dependencies).toHaveProperty('@cfworker/json-schema');
+    expect(pkg.dependencies).not.toHaveProperty('zod');
   });
 
   it('keeps secrets out of wrangler.jsonc and lists the api-key var in .dev.vars.example', async () => {
@@ -803,7 +1285,7 @@ describe('cloudflare-worker target', () => {
     expect(auth).toContain('url.searchParams.set');
     // index.ts delegates to the auth module instead of embedding scheme metadata.
     expect(fileContent(files, 'src/index.ts')).toContain(
-      "import { applyAuth } from './upstream-auth.js'"
+      "import { applyAuth, describeMissingCredentials, requiresCredentials } from './upstream-auth.js'"
     );
   });
 
@@ -910,5 +1392,48 @@ describe('cloudflare-worker target', () => {
     expect(index).toContain('API_BASE_URL');
     // It checks for an http(s) scheme before constructing the URL.
     expect(index).toMatch(/test\(baseUrl\)/);
+  });
+});
+
+// --- generated project manifests -------------------------------------------------
+
+describe('generated package.json', () => {
+  const manifest = (transport: string) =>
+    JSON.parse(generatePackageJson('demo', '1.0.0', transport));
+
+  it('requires Node 22 for the generator and every generated Node project', () => {
+    // The generator itself needs 22.19+ (@apidevtools/swagger-parser 13 and commander 15).
+    expect(rootPackageJson.engines.node).toBe('>=22.19.0');
+    for (const transport of ['stdio', 'web', 'streamable-http']) {
+      const pkg = manifest(transport);
+      expect(pkg.engines.node).toBe('>=22');
+      expect(pkg.devDependencies['@types/node']).toMatch(/^\^22\./);
+    }
+  });
+
+  it('validates with @cfworker/json-schema instead of zod and json-schema-to-zod', () => {
+    for (const transport of ['stdio', 'web', 'streamable-http']) {
+      const deps = manifest(transport).dependencies;
+      expect(deps).toHaveProperty('@cfworker/json-schema');
+      expect(deps).not.toHaveProperty('zod');
+      expect(deps).not.toHaveProperty('json-schema-to-zod');
+    }
+  });
+});
+
+describe('resolveServerUrl', () => {
+  it('substitutes server variables with their defaults', () => {
+    expect(
+      resolveServerUrl({
+        url: 'https://{region}.example.com/{version}',
+        variables: { region: { default: 'eu' }, version: { default: 'v2' } },
+      })
+    ).toBe('https://eu.example.com/v2');
+  });
+
+  it('stays fast on a long run of unmatched braces', () => {
+    const started = Date.now();
+    resolveServerUrl({ url: 'https://x/' + '{'.repeat(50_000) });
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });

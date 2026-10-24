@@ -28,19 +28,18 @@ export function generatePackageJson(
       prestart: 'npm run build',
     },
     engines: {
-      node: '>=20.0.0',
+      node: '>=22',
     },
     dependencies: {
       // MCP TypeScript SDK v2: serves MCP 2026-07-28 and 2025-era clients.
       '@modelcontextprotocol/server': '^2.4.0',
-      axios: '^1.9.0',
-      dotenv: '^16.4.5',
-      zod: '^3.24.3',
-      'json-schema-to-zod': '^2.6.1',
+      // JSON Schema 2020-12 validation of tool arguments (no code generation or eval).
+      '@cfworker/json-schema': '^4.1.1',
+      axios: '^1.20.0',
     },
     devDependencies: {
-      '@types/node': '^22.15.2',
-      typescript: '^5.8.3',
+      '@types/node': '^22.17.2',
+      typescript: '^6.0.3',
       shx: '^0.4.0',
     },
   };
@@ -49,14 +48,8 @@ export function generatePackageJson(
   if (includeWebDeps) {
     packageData.dependencies = {
       ...packageData.dependencies,
-      hono: '^4.7.7',
-      '@hono/node-server': '^1.14.1',
-      uuid: '^11.1.0',
-    };
-
-    packageData.devDependencies = {
-      ...packageData.devDependencies,
-      '@types/uuid': '^10.0.0',
+      hono: '^4.13.13',
+      '@hono/node-server': '^2.1.5',
     };
 
     // Add appropriate start script based on transport type

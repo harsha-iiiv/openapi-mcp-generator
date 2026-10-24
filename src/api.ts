@@ -5,10 +5,14 @@
 
 import SwaggerParser from '@apidevtools/swagger-parser';
 import { OpenAPIV3 } from 'openapi-types';
-import { extractToolsFromApi } from './parser/extract-tools.js';
-import { McpToolDefinition } from './types/index.js';
+import { extractToolsFromApi, filterTools } from './parser/extract-tools.js';
+import { McpToolAnnotations, McpToolDefinition } from './types/index.js';
 import { determineBaseUrl } from './utils/url.js';
-import { assertNoExternalRefs, parseSpecSecurely } from './utils/parser-security.js';
+import {
+  assertNoExternalRefs,
+  assertNotSwagger2,
+  parseSpecSecurely,
+} from './utils/parser-security.js';
 
 /**
  * Options for generating the MCP tools
@@ -22,6 +26,18 @@ export interface GetToolsOptions {
 
   /** Array of operation IDs to exclude from the tools list */
   excludeOperationIds?: string[];
+
+  /** Keep only operations with one of these tags (case-insensitive) */
+  includeTags?: string[];
+
+  /** Drop operations with any of these tags (case-insensitive); wins over inclusions */
+  excludeTags?: string[];
+
+  /** Keep only these operations (operationId or generated tool name) */
+  includeOperations?: string[];
+
+  /** Drop these operations (operationId or generated tool name); wins over inclusions */
+  excludeOperations?: string[];
 
   /** Optional filter function to exclude tools based on custom criteria */
   filterFn?: (tool: McpToolDefinition) => boolean;
@@ -68,6 +84,7 @@ export async function getToolsFromOpenApi(
     } else if (isOpenApiDocument(specPathOrUrl)) {
       // Pre-parsed document, no dereference requested: use as-is.
       api = specPathOrUrl;
+      assertNotSwagger2(api);
       if (!allowExternalRefs) assertNoExternalRefs(api);
     } else {
       // Parse-only (no dereference): fetch/read the entry document (http allowed
@@ -75,6 +92,7 @@ export async function getToolsFromOpenApi(
       api = (await SwaggerParser.parse(
         specPathOrUrl as Parameters<typeof SwaggerParser.parse>[0]
       )) as OpenAPIV3.Document;
+      assertNotSwagger2(api);
       if (!allowExternalRefs) assertNoExternalRefs(api);
     }
 
@@ -88,8 +106,9 @@ export async function getToolsFromOpenApi(
     // Add base URL to each tool
     const baseUrl = determineBaseUrl(api, options.baseUrl);
 
-    // Apply filters to exclude specified operationIds and custom filter function
-    let filteredTools = allTools;
+    // Tag and operation filters (the same rules as the CLI flags), then the
+    // legacy excludeOperationIds list and the custom filter function.
+    let filteredTools = filterTools(allTools, options);
 
     // Filter by excluded operation IDs if provided
     if (options.excludeOperationIds && options.excludeOperationIds.length > 0) {
@@ -118,4 +137,4 @@ export async function getToolsFromOpenApi(
 }
 
 // Export types for convenience
-export { McpToolDefinition };
+export { McpToolDefinition, McpToolAnnotations };

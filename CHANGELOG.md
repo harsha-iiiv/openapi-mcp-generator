@@ -19,13 +19,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     statelessly. 2025-era clients are served without sessions (GET and DELETE answer `405`),
     so servers scale behind any load balancer. `MCP_SESSION_IDLE_TIMEOUT` no longer applies.
   - web (SSE) stays on the 2025-era protocol, because the specification deprecates HTTP+SSE.
-- The Worker registers tools on the low-level server, validates arguments with the
-  build-time zod shapes, and returns the original JSON Schema from `tools/list`.
+- The Worker registers tools on the low-level server and returns the original JSON Schema from
+  `tools/list`.
 - Verified with the official v2 client pinned to 2026-07-28 on stdio, Streamable HTTP and the
   Worker, and with the v1 client for the 2025 era.
 
+### Breaking: safer, standards-correct generated servers
+
+- **Node.js 22 or later.** Node 20 reached end of life on 30 April 2026. Generated projects
+  declare `engines: >=22` and use `@types/node` 22; the generator itself needs Node 22.19+
+  (`@apidevtools/swagger-parser` 13 and `commander` 15 require it).
+- **Arguments are validated against the JSON Schema, without `eval`.** Generated Node servers
+  used to convert each input schema to zod source at runtime and `eval()` it; Workers shipped
+  build-time zod shapes. Both now validate with
+  [`@cfworker/json-schema`](https://www.npmjs.com/package/@cfworker/json-schema) (JSON Schema
+  2020-12, no code generation, Workers-safe), one cached validator per tool. Invalid arguments
+  are still a tool error (`isError: true`) and list every problem as `<location>: <message>`,
+  for example `Invalid arguments for tool 'getPet': /petId: Instance type "string" is invalid.
+Expected "integer".` Arguments are no longer rewritten: schema `default` values are **not
+  injected** and unknown properties are no longer stripped from request bodies. `oneOf` and
+  other compositions are validated exactly instead of through a lossy zod conversion (#16).
+- **Input schemas keep their meaning.** `type: integer` is no longer widened to `number`;
+  `example` becomes `examples: [example]` instead of being deleted; properties marked
+  `readOnly: true` are left out of request input schemas (and their `required` lists), so a
+  required server-assigned `id` no longer blocks calls. `format`, `pattern`, enums and
+  composition keywords are kept as written.
+- **Unknown tools are a protocol error.** Calling a tool name the server does not have now
+  answers JSON-RPC `-32602` (`Unknown tool: <name>`), as the MCP 2026-07-28 tools specification
+  requires, instead of an `isError` result. Invalid arguments and upstream API failures remain
+  tool errors.
+- **Missing upstream credentials fail closed (#82).** When an operation declares security, no
+  alternative can be satisfied (forwarded `--header-passthrough` headers count) and none of the
+  alternatives is the empty `{}`, the tool no longer sends the request unauthenticated. It
+  returns a tool error naming what to set, for example `Missing credentials for 'getPet': set
+API_KEY_PETSTORE_AUTH.` An empty `{}` alternative keeps anonymous access. Set
+  `MCP_ALLOW_MISSING_CREDENTIALS=true` (Node `.env`, or a Worker var) to restore the old
+  warn-and-send behavior.
+- **Swagger 2.0 input is refused** with a conversion hint
+  (`npx swagger2openapi swagger.json -o openapi.json`), in the CLI and the programmatic API.
+  It used to generate tools that silently dropped request bodies and security.
+- **Leaner generated projects.** `.env` is loaded with Node's built-in `process.loadEnvFile()`
+  (same location, the working directory; existing variables still win) instead of `dotenv`,
+  whose v17 logs to stdout and corrupts stdio servers. SSE session ids use
+  `crypto.randomUUID()` instead of `uuid`. `zod`, `json-schema-to-zod`, `dotenv`, `uuid` and
+  `@types/uuid` are gone; `@cfworker/json-schema` is added. `.eslintrc.json` and
+  `jest.config.js` are no longer generated (neither tool was installed). `tsconfig.json` sets
+  `"types": ["node"]` and `"rootDir": "./src"` for TypeScript 6. Ranges move to `typescript`
+  ^6.0.3, `hono` ^4.13.13, `@hono/node-server` ^2.1.5 and `axios` ^1.20.0.
+- **Honest generator dependencies.** The `@modelcontextprotocol/sdk`, `zod` and
+  `json-schema-to-zod` peer dependencies are removed (none is needed to run the generator),
+  as are the unused ESLint configuration and dev dependencies.
+
 ### Added
 
+- **Tool annotations and titles.** Every tool carries MCP annotations derived from its HTTP
+  method: `GET`/`HEAD`/`OPTIONS` are read-only; `POST` is neither destructive nor idempotent;
+  `PUT` and `DELETE` are destructive and idempotent; `PATCH` is destructive and not idempotent;
+  all are open-world. An operation's `x-mcp-annotations` object overrides individual hints. The
+  title comes from `x-mcp-title`, else the operation summary. Both are in `tools/list` and in
+  `McpToolDefinition` (`title`, `annotations`, exported `McpToolAnnotations`).
+- **Structured output.** A JSON response that parses to an object is also returned as
+  `structuredContent`; the text content is unchanged.
+- **`--output-schema`** declares each tool's `outputSchema` from its lowest 2xx
+  `application/json` response schema when that schema is an object (`writeOnly` properties
+  removed), and validates every response against it: a non-conforming or non-object response
+  becomes a tool error that names the mismatch and still shows the raw response, so the
+  declared schema is never violated. Opt-in, because many specs drift from real responses.
+- **Per-operation and per-path servers (#73).** An operation's `servers[0]` wins over its path
+  item's, which wins over the root server. An absolute operation or path server is used even
+  when `API_BASE_URL` is set; a relative one resolves against the active base URL
+  (`API_BASE_URL`, else the root server). Server variables resolve to their defaults, for the
+  root server too.
+- **Server instructions.** The spec's `info.description`, trimmed and capped at 2000
+  characters, is sent as the server `instructions`.
+- **Tag and operation filters:** `--include-tags`, `--exclude-tags`, `--include-operations`
+  and `--exclude-operations` (comma-separated; tags match case-insensitively, operations match
+  the operationId or the tool name). They apply after `x-mcp` / `--default-include`, include
+  lists combine, and exclusions win. The programmatic API takes the same options
+  (`includeTags`, `excludeTags`, `includeOperations`, `excludeOperations`).
 - A browser playground for generated `web`, `streamable-http` and `cloudflare-worker` servers,
   served at `/`. It lists tools, builds a form from each input schema (enums, numbers, booleans,
   lists, JSON bodies with a schema example), runs them and shows every JSON-RPC message, with
@@ -58,9 +129,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    files, including any edits you made to them.
 2. Regenerate with the same flags as before:
    `npx openapi-mcp-generator@5 --input ./openapi.json --output ./my-mcp --force`.
-3. Run `npm install` in the project. Node projects now depend on `@modelcontextprotocol/server`
-   `^2.4.0` instead of `@modelcontextprotocol/sdk`; Worker projects depend on
-   `@modelcontextprotocol/server` and `zod`.
+3. Use Node.js 22 or later (22.19+ to run the generator), then run `npm install` in the project.
+   Node projects now depend on `@modelcontextprotocol/server` `^2.4.0` instead of
+   `@modelcontextprotocol/sdk`, and on `@cfworker/json-schema` instead of `zod`,
+   `json-schema-to-zod`, `dotenv` and `uuid`; Worker projects depend on
+   `@modelcontextprotocol/server` and `@cfworker/json-schema`. Remove leftover
+   `.eslintrc.json` and `jest.config.js` files if you did not add those tools yourself.
 4. Move customized code to SDK v2: import from `@modelcontextprotocol/server` (stdio helpers
    from `@modelcontextprotocol/server/stdio`) instead of `@modelcontextprotocol/sdk/...`.
    `createServer()` returns the low-level v2 `Server`, and transports are wired with
@@ -68,10 +142,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 5. Streamable HTTP and Worker servers are stateless: no `mcp-session-id`, `GET` and `DELETE` on
    `/mcp` answer `405`, and `MCP_SESSION_IDLE_TIMEOUT` is ignored. Tool calls over `POST` work
    as before; clients that kept a `GET` stream open for server notifications no longer get one.
-6. Unchanged from 4.2: upstream credential variables and Worker secret names,
-   `--inbound-auth`, `--header-passthrough` and `MCP_ALLOWED_ORIGINS`. stdio and 2025-era
-   clients that start with `initialize` keep working.
-7. Not ready to move? Pin the previous major: `npx openapi-mcp-generator@4 ...`.
+6. Missing credentials now fail closed: configure the variables (or Worker secrets) your
+   operations require, or set `MCP_ALLOW_MISSING_CREDENTIALS=true` to keep sending such requests
+   without credentials. Operations whose security includes `{}` stay anonymous.
+7. Clients that treated an unknown tool as an `isError` result must handle JSON-RPC `-32602`.
+8. Schemas changed meaning in your favor, but check callers that relied on the old behavior:
+   integers are no longer accepted as fractional numbers, `readOnly` properties are no longer
+   part of request inputs, schema defaults are no longer filled in for omitted arguments
+   (the API applies its own defaults), and unknown request-body properties are passed through
+   instead of being stripped.
+9. Swagger 2.0 specs must be converted first: `npx swagger2openapi swagger.json -o openapi.json`.
+10. Unchanged from 4.2: upstream credential variables and Worker secret names,
+    `--inbound-auth`, `--header-passthrough` and `MCP_ALLOWED_ORIGINS`. stdio and 2025-era
+    clients that start with `initialize` keep working.
+11. Not ready to move? Pin the previous major: `npx openapi-mcp-generator@4 ...`.
 
 ## [4.2.0] - 2026-10-23
 

@@ -84,6 +84,34 @@ export interface CliOptions {
    * cloudflare-worker). Has no effect on stdio. Default 'none'.
    */
   inboundAuth?: InboundAuthMode;
+  /** Keep only operations with one of these tags (case-insensitive). */
+  includeTags?: string[];
+  /** Drop operations with any of these tags (case-insensitive). Wins over inclusions. */
+  excludeTags?: string[];
+  /** Keep only these operations (operationId or generated tool name). */
+  includeOperations?: string[];
+  /** Drop these operations (operationId or generated tool name). Wins over inclusions. */
+  excludeOperations?: string[];
+  /**
+   * Declare each tool's outputSchema from its first 2xx application/json response
+   * schema (object schemas only) and validate responses against it. Default false.
+   */
+  outputSchema?: boolean;
+}
+
+/**
+ * MCP tool annotations: hints about a tool's behavior. Clients treat them as
+ * untrusted hints, never as security guarantees.
+ */
+export interface McpToolAnnotations {
+  /** The tool does not modify its environment. */
+  readOnlyHint?: boolean;
+  /** The tool may perform destructive updates (meaningful when not read-only). */
+  destructiveHint?: boolean;
+  /** Repeating the call with the same arguments has no additional effect. */
+  idempotentHint?: boolean;
+  /** The tool interacts with an open world of external entities. */
+  openWorldHint?: boolean;
 }
 
 /**
@@ -93,6 +121,8 @@ export interface CliOptions {
 export interface McpToolDefinition {
   /** Name of the tool, must be unique */
   name: string;
+  /** Human-readable display name (operation `x-mcp-title`, else its summary) */
+  title?: string;
   /** Human-readable description of the tool */
   description: string;
   /** JSON Schema that defines the input parameters */
@@ -107,6 +137,11 @@ export interface McpToolDefinition {
   executionParameters: { name: string; in: string }[];
   /** Content type for request body, if applicable */
   requestBodyContentType?: string;
+  /**
+   * Server URL declared on the operation or its path item (variables resolved).
+   * Absolute URLs replace the base URL; relative ones resolve against it.
+   */
+  serverUrl?: string;
   /** Security requirements for this operation */
   securityRequirements: OpenAPIV3.SecurityRequirementObject[];
   /** Original operation ID from the OpenAPI spec */
@@ -115,6 +150,14 @@ export interface McpToolDefinition {
   tags?: string[];
   /** Whether the operation is marked deprecated in the OpenAPI spec */
   deprecated?: boolean;
+  /** Behavior hints derived from the HTTP method, overridable with `x-mcp-annotations` */
+  annotations?: McpToolAnnotations;
+  /**
+   * JSON Schema of the first (lowest) 2xx `application/json` response, when it describes
+   * an object (writeOnly properties removed). Generated servers declare it as the
+   * tool's outputSchema only with --output-schema.
+   */
+  outputSchema?: JSONSchema7;
 }
 
 /**

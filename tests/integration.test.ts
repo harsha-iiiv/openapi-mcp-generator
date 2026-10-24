@@ -1,7 +1,7 @@
 /**
  * Integration smoke test: generate a server from a fixture spec and TypeScript
  * type-check the generated `src/index.ts` to catch build-breaking regressions
- * (e.g. issue #65). Uses the root project's installed peer deps for resolution.
+ * (e.g. issue #65). Uses the root project's installed dependencies for resolution.
  *
  * Run with: npm test
  */
@@ -19,7 +19,7 @@ const cliEntry = path.join(repoRoot, 'bin', 'openapi-mcp-generator.js');
 /**
  * Type-check generated TS against the repo's node_modules. The generated
  * project lives under the repo root so Node's upward module resolution finds
- * the installed peer deps (@modelcontextprotocol/sdk, zod, axios, ...).
+ * the installed deps (@modelcontextprotocol/server, @cfworker/json-schema, axios, ...).
  */
 function typecheckGenerated(srcDir: string): { ok: boolean; output: string } {
   const tmpTsconfig = path.join(srcDir, '..', 'tsconfig.check.json');
@@ -126,11 +126,82 @@ describe('integration: generate + typecheck', () => {
     const out = path.join(workdir, 'web-passthrough');
     generate(out, ['--transport', 'web', '--header-passthrough', 'X-API-Key']);
     const webTs = fs.readFileSync(path.join(out, 'src', 'web-server.ts'), 'utf8');
+    expect(webTs).toContain("import { randomUUID } from 'node:crypto'");
+    expect(webTs).not.toContain('uuid');
     expect(webTs).toContain("import { inboundHeaderStore } from './index.js'");
     expect(webTs).toContain('inboundHeaderStore.run(');
     expect(webTs).not.toContain('__mcpInboundHeaders');
     const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
     expect(indexTs).toContain('export const inboundHeaderStore');
+  });
+
+  it('emits no eval or Function constructor in any generated file, for every target', () => {
+    const walk = (dir: string): string[] =>
+      fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = path.join(dir, entry.name);
+        return entry.isDirectory() ? walk(full) : [full];
+      });
+    for (const transport of ['stdio', 'web', 'streamable-http', 'cloudflare-worker']) {
+      const out = path.join(workdir, `no-eval-${transport}`);
+      generate(out, ['--transport', transport]);
+      const files = walk(out);
+      expect(files.length).toBeGreaterThan(3);
+      for (const file of files) {
+        const content = fs.readFileSync(file, 'utf8');
+        expect(content, file).not.toMatch(/\beval\s*\(/);
+        expect(content, file).not.toMatch(/\bnew\s+Function\s*\(/);
+        expect(content, file).not.toContain('json-schema-to-zod');
+      }
+      const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
+      expect(pkg.dependencies, transport).toHaveProperty('@cfworker/json-schema');
+      expect(pkg.dependencies, transport).not.toHaveProperty('zod');
+    }
+  });
+
+  it('applies --include/--exclude tag and operation filters to every target', () => {
+    const spec = path.join(workdir, 'filters.json');
+    const op = (operationId: string, tags: string[]) => ({
+      operationId,
+      tags,
+      responses: { '200': { description: 'ok' } },
+    });
+    fs.writeFileSync(
+      spec,
+      JSON.stringify({
+        openapi: '3.0.3',
+        info: { title: 'filters', version: '1' },
+        servers: [{ url: 'https://api.example.com' }],
+        paths: {
+          '/pets': { get: op('listPets', ['pets']), delete: op('deletePets', ['pets', 'admin']) },
+          '/stores': { get: op('listStores', ['stores']) },
+          '/orders': { get: op('listOrders', ['orders']) },
+        },
+      })
+    );
+    const args = [
+      '--include-tags',
+      'Pets,Stores',
+      '--include-operations',
+      'listOrders',
+      '--exclude-tags',
+      'admin',
+      '--exclude-operations',
+      'listStores',
+    ];
+    for (const [transport, file] of [
+      ['stdio', 'src/index.ts'],
+      ['cloudflare-worker', 'src/tools.ts'],
+    ]) {
+      const out = path.join(workdir, `filters-${transport}`);
+      execFileSync(
+        'node',
+        [cliEntry, '-i', spec, '-o', out, '--force', '--transport', transport, ...args],
+        { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }
+      );
+      const source = fs.readFileSync(path.join(out, file), 'utf8');
+      const toolNames = [...source.matchAll(/^\s*name: "([^"]+)"/gm)].map((m) => m[1]);
+      expect(toolNames, transport).toEqual(['listPets', 'listOrders']);
+    }
   });
 
   it('rejects external $ref by default (SSRF guard)', () => {
@@ -166,6 +237,37 @@ describe('integration: generate + typecheck', () => {
     // Assert it failed specifically because of the external-ref SSRF guard,
     // not some unrelated regression.
     expect(output).toMatch(/external \$ref|SSRF|allow-external-refs/i);
+  });
+
+  it('refuses a Swagger 2.0 spec with a conversion hint and writes nothing', () => {
+    const swaggerSpec = path.join(workdir, 'swagger.json');
+    fs.writeFileSync(
+      swaggerSpec,
+      JSON.stringify({
+        swagger: '2.0',
+        info: { title: 'legacy', version: '1' },
+        paths: {
+          '/x': { get: { operationId: 'getX', responses: { '200': { description: 'ok' } } } },
+        },
+      })
+    );
+    const out = path.join(workdir, 'swagger-out');
+    let output = '';
+    let failed = false;
+    try {
+      execFileSync('node', [cliEntry, '--input', swaggerSpec, '--output', out, '--force'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
+    } catch (e: any) {
+      failed = true;
+      output = `${e.stdout ?? ''}${e.stderr ?? ''}`;
+    }
+    expect(failed).toBe(true);
+    expect(output).toContain('Swagger 2.0 is not supported. Convert it to OpenAPI 3 first');
+    expect(output).toContain('npx swagger2openapi swagger.json -o openapi.json');
+    expect(fs.existsSync(out)).toBe(false);
   });
 
   it('allows external $ref when --allow-external-refs is set (guard does not block)', () => {
@@ -286,7 +388,7 @@ describe('integration: generate + typecheck', () => {
     // src/tools.ts exposes the shared tool maps.
     const toolsTs = fs.readFileSync(path.join(out, 'src', 'tools.ts'), 'utf8');
     expect(toolsTs).toContain('export const toolDefinitionMap');
-    expect(toolsTs).toContain('export const toolZodShapes');
+    expect(toolsTs).not.toContain('zod');
 
     // wrangler.jsonc is configured for the Worker entrypoint + Node compat.
     const wrangler = fs.readFileSync(path.join(out, 'wrangler.jsonc'), 'utf8');

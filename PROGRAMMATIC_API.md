@@ -30,7 +30,14 @@ This function extracts an array of tools from an OpenAPI specification.
 - `baseUrl`: Override the base URL in the OpenAPI spec
 - `dereference`: Whether to resolve $refs (default: false)
 - `excludeOperationIds`: Array of operation IDs to exclude from the results
+- `includeTags` / `excludeTags`: Keep only, or drop, operations with these tags (case-insensitive)
+- `includeOperations` / `excludeOperations`: Keep only, or drop, these operations (operationId or tool
+  name). The four filters match the CLI flags: include lists combine, exclusions win, and they apply
+  after `x-mcp` filtering
 - `filterFn`: Custom function to filter tools (receives tool, returns boolean)
+
+Swagger 2.0 documents are rejected with an error; convert them to OpenAPI 3 first
+(`npx swagger2openapi swagger.json -o openapi.json`).
 
 **Returns:**
 
@@ -87,6 +94,9 @@ interface McpToolDefinition {
   /** Name of the tool, must be unique */
   name: string;
 
+  /** Display title: the operation's x-mcp-title, else its summary */
+  title?: string;
+
   /** Human-readable description of the tool */
   description: string;
 
@@ -111,15 +121,48 @@ interface McpToolDefinition {
   /** Security requirements for this operation */
   securityRequirements: OpenAPIV3.SecurityRequirementObject[];
 
+  /** Server declared on the operation or path item (variables resolved) */
+  serverUrl?: string;
+
   /** Original operation ID from the OpenAPI spec */
   operationId: string;
+
+  /** OpenAPI tags and deprecation status */
+  tags?: string[];
+  deprecated?: boolean;
+
+  /** Behavior hints from the HTTP method, overridable with x-mcp-annotations */
+  annotations?: McpToolAnnotations; // readOnlyHint, destructiveHint, idempotentHint, openWorldHint
+
+  /** Schema of the lowest 2xx application/json response, when it is an object */
+  outputSchema?: JSONSchema7;
 
   /** Base URL for the API (if available) */
   baseUrl?: string;
 }
 ```
 
+`inputSchema` is JSON Schema 2020-12: integers stay `integer`, `example` becomes `examples`, and
+properties marked `readOnly` are omitted from request inputs.
+
 ## Advanced Filtering Examples
+
+### Filter by Tag
+
+```typescript
+const petTools = await getToolsFromOpenApi(specUrl, {
+  includeTags: ['pets'],
+  excludeOperations: ['deletePet'],
+});
+```
+
+### Read-only Tools
+
+```typescript
+const readOnlyTools = await getToolsFromOpenApi(specUrl, {
+  filterFn: (tool) => tool.annotations?.readOnlyHint === true,
+});
+```
 
 ### Filter by HTTP Method
 

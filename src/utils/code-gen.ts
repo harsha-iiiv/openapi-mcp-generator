@@ -65,22 +65,40 @@ export function generateToolDefinitionMap(
         console.warn(`Failed to stringify tags for tool ${tool.name}: ${e}`);
       }
 
+      // JSON string literals are safe inside the generated source.
+      const titleLine =
+        tool.title !== undefined ? `\n    title: ${JSON.stringify(tool.title)},` : '';
+      const annotationsString = JSON.stringify(tool.annotations ?? {});
+      const outputSchemaLine =
+        tool.outputSchema !== undefined
+          ? `,\n    outputSchema: ${JSON.stringify(tool.outputSchema)}`
+          : '';
+
       // Build the tool definition entry
       return `
   ["${tool.name}", {
-    name: "${tool.name}",
+    name: "${tool.name}",${titleLine}
     description: \`${escapedDescription}\`,
     inputSchema: ${schemaString},
     method: "${tool.method}",
     pathTemplate: "${tool.pathTemplate}",
     executionParameters: ${execParamsString},
-    requestBodyContentType: ${tool.requestBodyContentType ? `"${tool.requestBodyContentType}"` : 'undefined'},
+    requestBodyContentType: ${tool.requestBodyContentType ? `"${tool.requestBodyContentType}"` : 'undefined'},${tool.serverUrl !== undefined ? `\n    serverUrl: ${JSON.stringify(tool.serverUrl)},` : ''}
     securityRequirements: ${securityReqsString},
     tags: ${tagsString},
-    deprecated: ${tool.deprecated ? 'true' : 'false'}
+    deprecated: ${tool.deprecated ? 'true' : 'false'},
+    annotations: ${annotationsString}${outputSchemaLine}
   }],`;
     })
     .join('');
+}
+
+/**
+ * Returns the tools without their output schemas, for servers generated
+ * without --output-schema.
+ */
+export function withoutOutputSchemas(tools: McpToolDefinition[]): McpToolDefinition[] {
+  return tools.map(({ outputSchema: _outputSchema, ...tool }) => tool);
 }
 
 /**
@@ -93,8 +111,11 @@ export function generateListToolsHandler(): string {
 server.setRequestHandler('tools/list', async () => {
   const toolsForClient: Tool[] = Array.from(toolDefinitionMap.values()).map(def => ({
     name: def.name,
+    ...(def.title !== undefined && { title: def.title }),
     description: def.description,
-    inputSchema: def.inputSchema
+    inputSchema: def.inputSchema,
+    ...(def.outputSchema !== undefined && { outputSchema: def.outputSchema }),
+    annotations: def.annotations
   }));
   return { tools: toolsForClient };
 });
@@ -112,11 +133,125 @@ server.setRequestHandler('tools/call', async (request: CallToolRequest): Promise
   const { name: toolName, arguments: toolArgs } = request.params;
   const toolDefinition = toolDefinitionMap.get(toolName);
   if (!toolDefinition) {
+    // An unknown tool is a protocol error (JSON-RPC -32602), not a tool result.
     console.error(\`Error: Unknown tool requested: \${toolName}\`);
-    return { isError: true, content: [{ type: "text", text: \`Error: Unknown tool requested: \${toolName}\` }] };
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, \`Unknown tool: \${toolName}\`);
   }
   return await executeApiTool(toolName, toolDefinition, toolArgs ?? {}, securitySchemes);
 });
+`;
+}
+
+/**
+ * Generates the JSON Schema validation helpers shared by the Node and Worker
+ * targets. Validation uses @cfworker/json-schema (JSON Schema 2020-12), which
+ * interprets schemas directly: no code generation, no eval, safe on Workers.
+ * The generated module must import `Validator` and `OutputUnit` from
+ * '@cfworker/json-schema'.
+ *
+ * @returns Generated TypeScript source
+ */
+export function generateSchemaValidationCode(): string {
+  return `
+/** Compiled JSON Schema validators, created on first use and cached by key. */
+const schemaValidators = new Map<string, Validator>();
+
+/**
+ * Returns the cached validator for a schema (JSON Schema 2020-12, all errors).
+ * The validator gets its own copy because compiling annotates the schema object.
+ */
+function getSchemaValidator(key: string, schema: unknown): Validator {
+    let validator = schemaValidators.get(key);
+    if (!validator) {
+        const compiled = typeof schema === 'boolean' ? schema : structuredClone(schema ?? {});
+        validator = new Validator(compiled as any, '2020-12', false);
+        schemaValidators.set(key, validator);
+    }
+    return validator;
+}
+
+/** Keywords whose errors only repeat that a nested value failed. */
+const SUMMARY_KEYWORDS = new Set([
+    'properties', 'patternProperties', 'additionalProperties', 'unevaluatedProperties',
+    'items', 'prefixItems', 'additionalItems', 'unevaluatedItems', 'contains',
+    'dependentSchemas', 'propertyNames', '$ref', '$recursiveRef', '$dynamicRef',
+]);
+
+/**
+ * Formats validation errors as "<location>: <message>" joined with "; ",
+ * dropping summaries that only repeat a more specific error.
+ */
+function formatSchemaErrors(errors: OutputUnit[]): string {
+    const location = (pointer: string) => (pointer === '#' || pointer === '' ? '(root)' : pointer.replace(/^#/, ''));
+    const isUnder = (pointer: string, parent: string) => pointer === parent || pointer.startsWith(parent + '/');
+    const specific = errors.filter((e) => !SUMMARY_KEYWORDS.has(e.keyword) && e.keyword !== 'false');
+    const kept = errors.filter((e) => {
+        if (SUMMARY_KEYWORDS.has(e.keyword)) {
+            return !specific.some((other) => isUnder(other.instanceLocation, e.instanceLocation));
+        }
+        if (e.keyword === 'false') {
+            // "false" schemas reject any value, e.g. a property additionalProperties forbids.
+            return !specific.some((other) => other.instanceLocation === e.instanceLocation);
+        }
+        return true;
+    });
+    const messages: string[] = [];
+    for (const e of kept.length > 0 ? kept : errors) {
+        const text = e.keyword === 'false' ? 'Not allowed by the schema.' : e.error;
+        const message = \`\${location(e.instanceLocation)}: \${text}\`;
+        if (!messages.includes(message)) messages.push(message);
+    }
+    return messages.join('; ');
+}
+
+/**
+ * Validates a structured result against the tool's declared output schema.
+ * Returns a readable error message, or null when it conforms.
+ */
+function validateToolOutput(toolName: string, outputSchema: unknown, value: unknown): string | null {
+    const result = getSchemaValidator(\`output:\${toolName}\`, outputSchema).validate(value);
+    return result.valid ? null : formatSchemaErrors(result.errors);
+}
+
+/**
+ * Validates tool arguments against the tool's input schema. Returns a readable
+ * error message, or null when they are valid. Arguments are never modified:
+ * schema defaults are not injected.
+ */
+function validateToolArguments(toolName: string, inputSchema: unknown, args: unknown): string | null {
+    const result = getSchemaValidator(\`input:\${toolName}\`, inputSchema).validate(args);
+    return result.valid ? null : \`Invalid arguments for tool '\${toolName}': \${formatSchemaErrors(result.errors)}\`;
+}
+`;
+}
+
+/**
+ * Generates the helper that picks the upstream base URL for one operation:
+ * an absolute operation/path-item server replaces the base URL; a relative one
+ * resolves against it. Shared by the Node and Worker targets.
+ *
+ * @returns Generated TypeScript source
+ */
+export function generateServerUrlResolutionCode(): string {
+  return `
+/**
+ * Base URL for one operation. Without an operation or path-item server this is
+ * the configured base URL (API_BASE_URL, else the spec's root server). An
+ * absolute operation/path-item server is used as is, even when API_BASE_URL is
+ * set; a relative one resolves against the configured base URL ("v2" appends a
+ * segment, "/v2" replaces the path).
+ */
+function resolveOperationBaseUrl(serverUrl: string | undefined, baseUrl: string): string {
+    if (!serverUrl) return baseUrl;
+    const isAbsolute = (url: string) => /^[a-z][a-z0-9+.-]*:\\/\\//i.test(url);
+    if (isAbsolute(serverUrl)) return serverUrl.replace(/\\/+$/, '');
+    if (isAbsolute(baseUrl)) {
+        return new URL(serverUrl, baseUrl.replace(/\\/*$/, '/')).href.replace(/\\/+$/, '');
+    }
+    // Both relative: join the paths.
+    if (serverUrl.startsWith('/')) return serverUrl.replace(/\\/+$/, '');
+    return \`\${baseUrl.replace(/\\/+$/, '')}/\${serverUrl}\`.replace(/\\/+$/, '');
+}
 `;
 }
 

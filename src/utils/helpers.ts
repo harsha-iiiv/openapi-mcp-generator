@@ -181,3 +181,19 @@ export function shouldIncludeOperationForMcp(
 
   return defaultInclude;
 }
+
+/** Maximum length of the server instructions taken from info.description. */
+export const MAX_SERVER_INSTRUCTIONS_LENGTH = 2000;
+
+/**
+ * Server instructions for MCP clients: the spec's info.description, trimmed and
+ * bounded to {@link MAX_SERVER_INSTRUCTIONS_LENGTH} characters. Undefined when
+ * the description is missing or blank.
+ */
+export function getServerInstructions(description: unknown): string | undefined {
+  if (typeof description !== 'string') return undefined;
+  const trimmed = description.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length <= MAX_SERVER_INSTRUCTIONS_LENGTH) return trimmed;
+  return trimmed.slice(0, MAX_SERVER_INSTRUCTIONS_LENGTH - 1).trimEnd() + '…';
+}
