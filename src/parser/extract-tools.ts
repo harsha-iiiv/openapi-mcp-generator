@@ -368,25 +368,67 @@ export function generateInputSchemaAndDetails(
   return { inputSchema, parameters: allParameters, requestBodyContentType };
 }
 
+/** Keywords whose value is a single subschema. */
+const SINGLE_SCHEMA_KEYWORDS = [
+  'additionalProperties',
+  'additionalItems',
+  'unevaluatedProperties',
+  'unevaluatedItems',
+  'propertyNames',
+  'contains',
+  'not',
+  'if',
+  'then',
+  'else',
+] as const;
+/** Keywords whose value is an array of subschemas. */
+const SCHEMA_ARRAY_KEYWORDS = ['allOf', 'anyOf', 'oneOf', 'prefixItems'] as const;
+/** Keywords whose value maps names to subschemas. */
+const SCHEMA_MAP_KEYWORDS = [
+  'properties',
+  'patternProperties',
+  'dependentSchemas',
+  '$defs',
+  'definitions',
+] as const;
+
 /**
- * Maps an OpenAPI schema to a JSON Schema with cycle protection.
+ * OpenAPI 3.0 writes exclusive bounds as a boolean next to minimum/maximum;
+ * JSON Schema (and OpenAPI 3.1) writes the bound itself. Converts the 3.0 form
+ * and leaves numeric bounds untouched.
+ */
+function normalizeExclusiveBound(schema: Record<string, any>, bound: 'minimum' | 'maximum'): void {
+  const exclusiveKey = bound === 'minimum' ? 'exclusiveMinimum' : 'exclusiveMaximum';
+  if (typeof schema[exclusiveKey] !== 'boolean') return;
+  if (schema[exclusiveKey] && typeof schema[bound] === 'number') {
+    schema[exclusiveKey] = schema[bound];
+    delete schema[bound];
+  } else {
+    delete schema[exclusiveKey];
+  }
+}
+
+/**
+ * Maps an OpenAPI schema to JSON Schema, recursing into every subschema
+ * (properties, items, composition keywords, additionalProperties, ...).
  *
  * @param schema OpenAPI schema object or reference
- * @param seen WeakSet tracking already visited schema objects
+ * @param seen Schemas on the current recursion path, used to break cycles
  * @returns JSON Schema representation
  */
 export function mapOpenApiSchemaToJsonSchema(
   schema: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject,
   seen: WeakSet<object> = new WeakSet()
 ): JSONSchema7 | boolean {
+  // Handle boolean schemas
+  if (typeof schema === 'boolean') return schema;
+  if (schema === null || typeof schema !== 'object') return {};
+
   // Handle reference objects
   if ('$ref' in schema) {
     console.warn(`Unresolved $ref '${schema.$ref}'.`);
     return { type: 'object' };
   }
-
-  // Handle boolean schemas
-  if (typeof schema === 'boolean') return schema;
 
   // Detect cycles
   if (seen.has(schema)) {
@@ -399,35 +441,27 @@ export function mapOpenApiSchemaToJsonSchema(
 
   try {
     // Create a copy of the schema to modify
-    const jsonSchema: JSONSchema7 = { ...schema } as any;
+    const jsonSchema: Record<string, any> = { ...schema };
 
-    // OpenAPI 3.0 represents exclusiveMinimum as a boolean paired with minimum,
-    // while JSON Schema expects the exclusive bound itself to be a number.
-    if (typeof jsonSchema.exclusiveMinimum === 'boolean') {
-      if (jsonSchema.exclusiveMinimum && typeof jsonSchema.minimum === 'number') {
-        jsonSchema.exclusiveMinimum = jsonSchema.minimum;
-        delete jsonSchema.minimum;
-      } else {
-        delete jsonSchema.exclusiveMinimum;
-      }
-    }
+    normalizeExclusiveBound(jsonSchema, 'minimum');
+    normalizeExclusiveBound(jsonSchema, 'maximum');
 
     // Convert integer type to number (JSON Schema compatible)
     if (schema.type === 'integer') jsonSchema.type = 'number';
 
     // Remove OpenAPI-specific properties that aren't in JSON Schema
-    delete (jsonSchema as any).nullable;
-    delete (jsonSchema as any).example;
-    delete (jsonSchema as any).xml;
-    delete (jsonSchema as any).externalDocs;
-    delete (jsonSchema as any).deprecated;
-    delete (jsonSchema as any).readOnly;
-    delete (jsonSchema as any).writeOnly;
+    delete jsonSchema.nullable;
+    delete jsonSchema.example;
+    delete jsonSchema.xml;
+    delete jsonSchema.externalDocs;
+    delete jsonSchema.deprecated;
+    delete jsonSchema.readOnly;
+    delete jsonSchema.writeOnly;
 
     // Handle nullable properties by adding null to the type
     if (schema.nullable) {
       if (Array.isArray(jsonSchema.type)) {
-        if (!jsonSchema.type.includes('null')) jsonSchema.type.push('null');
+        if (!jsonSchema.type.includes('null')) jsonSchema.type = [...jsonSchema.type, 'null'];
       } else if (typeof jsonSchema.type === 'string') {
         jsonSchema.type = [jsonSchema.type as JSONSchema7TypeName, 'null'];
       } else if (!jsonSchema.type) {
@@ -435,36 +469,33 @@ export function mapOpenApiSchemaToJsonSchema(
       }
     }
 
-    // Recursively process object properties
-    if (jsonSchema.type === 'object' && jsonSchema.properties) {
-      const mappedProps: { [key: string]: JSONSchema7 | boolean } = {};
+    const mapChild = (child: unknown): unknown =>
+      child !== null && typeof child === 'object' && !Array.isArray(child)
+        ? mapOpenApiSchemaToJsonSchema(child as OpenAPIV3.SchemaObject, seen)
+        : child;
 
-      for (const [key, propSchema] of Object.entries(jsonSchema.properties)) {
-        if (typeof propSchema === 'object' && propSchema !== null) {
-          mappedProps[key] = mapOpenApiSchemaToJsonSchema(
-            propSchema as OpenAPIV3.SchemaObject,
-            seen
-          );
-        } else if (typeof propSchema === 'boolean') {
-          mappedProps[key] = propSchema;
-        }
-      }
-
-      jsonSchema.properties = mappedProps;
+    for (const keyword of SINGLE_SCHEMA_KEYWORDS) {
+      if (keyword in jsonSchema) jsonSchema[keyword] = mapChild(jsonSchema[keyword]);
+    }
+    // items is one schema (OpenAPI 3.0 / 3.1) or a tuple (older drafts)
+    if ('items' in jsonSchema) {
+      jsonSchema.items = Array.isArray(jsonSchema.items)
+        ? jsonSchema.items.map(mapChild)
+        : mapChild(jsonSchema.items);
+    }
+    for (const keyword of SCHEMA_ARRAY_KEYWORDS) {
+      if (Array.isArray(jsonSchema[keyword]))
+        jsonSchema[keyword] = jsonSchema[keyword].map(mapChild);
+    }
+    for (const keyword of SCHEMA_MAP_KEYWORDS) {
+      const map = jsonSchema[keyword];
+      if (map === null || typeof map !== 'object' || Array.isArray(map)) continue;
+      const mapped: Record<string, unknown> = {};
+      for (const [name, child] of Object.entries(map)) mapped[name] = mapChild(child);
+      jsonSchema[keyword] = mapped;
     }
 
-    // Recursively process array items
-    if (
-      jsonSchema.type === 'array' &&
-      typeof jsonSchema.items === 'object' &&
-      jsonSchema.items !== null
-    ) {
-      jsonSchema.items = mapOpenApiSchemaToJsonSchema(
-        jsonSchema.items as OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject,
-        seen
-      );
-    }
-    return jsonSchema;
+    return jsonSchema as JSONSchema7;
   } finally {
     seen.delete(schema);
   }
