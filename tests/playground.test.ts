@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { OpenAPIV3 } from 'openapi-types';
 
-import { McpClient, McpHttpError, SseParser } from '../playground/mcp-client.js';
+import { McpClient, McpHttpError, SseParser, MAX_SSE_BUFFER } from '../playground/mcp-client.js';
 import { extractToolsFromApi } from '../src/parser/extract-tools.js';
 import { generateCloudflareWorkerFiles } from '../src/generator/cloudflare-worker.js';
 
@@ -204,6 +204,47 @@ describe('SseParser', () => {
       { event: 'endpoint', data: '/api/messages?sessionId=1', id: undefined },
       { event: 'message', data: '{"a":\n1}', id: undefined },
     ]);
+  });
+});
+
+describe('playground client: hostile or broken responses', () => {
+  it('rejects an unterminated SSE event larger than 1 MiB', () => {
+    const parser = new SseParser();
+    expect(() => parser.push('data: ' + 'x'.repeat(MAX_SSE_BUFFER + 1))).toThrow(
+      /larger than 1 MiB/
+    );
+    // The parser recovers for the next event.
+    expect(parser.push('data: ok\n\n')).toEqual([{ event: 'message', data: 'ok' }]);
+  });
+
+  it('explains a successful response that is not JSON', async () => {
+    const client = new McpClient({
+      url: 'http://127.0.0.1:1/mcp',
+      fetch: async () =>
+        new Response('<html>not mcp</html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        }),
+    });
+    await expect(client.connect()).rejects.toThrow(/something other than JSON/);
+  });
+
+  it('reports a body that stalls past the timeout as a timeout, not a raw AbortError', async () => {
+    const client = new McpClient({
+      url: 'http://127.0.0.1:1/mcp',
+      timeoutMs: 200,
+      fetch: async (_input: unknown, init?: RequestInit) => {
+        const body = new ReadableStream({
+          start(controller) {
+            init?.signal?.addEventListener('abort', () =>
+              controller.error(new DOMException('The operation was aborted.', 'AbortError'))
+            );
+          },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    await expect(client.connect()).rejects.toThrow(/No response within/);
   });
 });
 

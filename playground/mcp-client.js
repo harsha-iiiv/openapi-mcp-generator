@@ -32,6 +32,9 @@ export class McpHttpError extends Error {
   }
 }
 
+/** Largest unterminated SSE event the parser will hold, so a stream cannot exhaust memory. */
+export const MAX_SSE_BUFFER = 1024 * 1024;
+
 /** Incremental parser for text/event-stream bodies. */
 export class SseParser {
   constructor() {
@@ -48,6 +51,10 @@ export class SseParser {
       this.buffer = this.buffer.slice(boundary + 2);
       const event = parseEventBlock(block);
       if (event) events.push(event);
+    }
+    if (this.buffer.length > MAX_SSE_BUFFER) {
+      this.buffer = '';
+      throw new Error('The server sent an SSE event larger than 1 MiB.');
     }
     return events;
   }
@@ -329,6 +336,19 @@ export class McpClient {
     }
   }
 
+  /** Turns a failure while reading a successful response body into a readable message. */
+  bodyReadError(error, expectedJson = false) {
+    if (error && error.name === 'AbortError') {
+      return new Error(`No response within ${Math.round(this.timeoutMs / 1000)} s.`);
+    }
+    if (expectedJson && error instanceof SyntaxError) {
+      return new Error(
+        'The server answered with something other than JSON. Check the endpoint URL (usually /mcp).'
+      );
+    }
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
   async failFromResponse(res) {
     const body = await res.text().catch(() => '');
     const error = new McpHttpError(
@@ -364,8 +384,19 @@ export class McpClient {
         return null;
       }
       const type = res.headers.get('content-type') || '';
-      if (type.includes('text/event-stream')) return await this.readStreamFor(res, message.id);
-      const payload = await res.json();
+      if (type.includes('text/event-stream')) {
+        try {
+          return await this.readStreamFor(res, message.id);
+        } catch (error) {
+          throw this.bodyReadError(error);
+        }
+      }
+      let payload;
+      try {
+        payload = await res.json();
+      } catch (error) {
+        throw this.bodyReadError(error, true);
+      }
       const messages = Array.isArray(payload) ? payload : [payload];
       let match;
       for (const msg of messages) {
@@ -445,6 +476,7 @@ export class McpClient {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     const parser = new SseParser();
+    let failure;
     const pump = async () => {
       try {
         for (;;) {
@@ -468,14 +500,15 @@ export class McpClient {
             }
           }
         }
-      } catch {
-        // aborted or network failure
+      } catch (error) {
+        // Aborted, network failure, or an oversized event: keep the reason for pending calls.
+        if (error && error.name !== 'AbortError') failure = error;
       }
       clearTimeout(timer);
-      rejectEndpoint(new Error('The SSE stream closed before it sent an endpoint.'));
+      rejectEndpoint(failure || new Error('The SSE stream closed before it sent an endpoint.'));
       this.connected = false;
       for (const pending of this.pending.values())
-        pending.reject(new Error('The SSE stream closed.'));
+        pending.reject(failure || new Error('The SSE stream closed.'));
       this.pending.clear();
     };
     pump();
