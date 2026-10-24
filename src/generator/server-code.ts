@@ -9,6 +9,7 @@ import {
   generateListToolsHandler,
   generateSchemaValidationCode,
   generateServerUrlResolutionCode,
+  withoutOutputSchemas,
 } from '../utils/code-gen.js';
 import {
   generateExecuteApiToolFunction,
@@ -33,10 +34,12 @@ export function generateMcpServerCode(
   serverVersion: string
 ): string {
   // Extract tools from API
-  const tools = filterTools(
+  const extracted = filterTools(
     extractToolsFromApi(api, options.defaultInclude ?? true, options.maxToolNameLength ?? 64),
     options
   );
+  // Output schemas are declared (and enforced) only with --output-schema.
+  const tools = options.outputSchema ? extracted : withoutOutputSchemas(extracted);
 
   // Determine base URL
   const determinedBaseUrl = determineBaseUrl(api, options.baseUrl);
@@ -192,6 +195,7 @@ interface McpToolDefinition {
     securityRequirements: any[];
     tags?: string[];
     deprecated?: boolean;
+    outputSchema?: any;
     annotations: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
 }
 

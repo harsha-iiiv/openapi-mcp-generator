@@ -69,10 +69,17 @@ function startUpstream(): Promise<Upstream> {
         body,
       };
       requests.push(record);
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(
-        JSON.stringify({ method: record.method, path: record.path, query: record.query, body })
-      );
+      const echo = { method: record.method, path: record.path, query: record.query, body };
+      if (url.pathname.startsWith('/text')) {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('plain text');
+      } else if (url.pathname.startsWith('/list')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify([echo]));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(echo));
+      }
     });
   });
   return new Promise((resolve) =>
@@ -582,5 +589,141 @@ describe('per-operation and per-path servers (#73)', () => {
       expect(result.isError ?? false, client.label).toBe(false);
       expect(upstream.requests.at(-1)?.path, client.label).toBe('/abs/v9/relative');
     }
+  });
+});
+
+// --- structured output -------------------------------------------------------------
+
+describe('structured output', () => {
+  const echoSchema = {
+    type: 'object',
+    required: ['method', 'path'],
+    properties: {
+      method: { type: 'string', enum: ['GET'] },
+      path: { type: 'string' },
+      query: { type: 'object' },
+      secret: { type: 'string', writeOnly: true },
+    },
+  };
+  const json = (schema: object) => ({
+    '200': { description: 'ok', content: { 'application/json': { schema } } },
+  });
+  const outputSpec = (): OpenAPIV3.Document =>
+    ({
+      openapi: '3.0.3',
+      info: { title: 'Output Matrix', version: '1.0.0' },
+      servers: [{ url: upstream.url }],
+      paths: {
+        '/objects/{id}': {
+          get: {
+            operationId: 'getObject',
+            parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+            responses: json({ ...echoSchema, required: ['method', 'path', 'secret'] }),
+          },
+        },
+        '/mismatch': {
+          get: {
+            operationId: 'getMismatch',
+            responses: json({ type: 'object', required: ['missing'], properties: { missing: {} } }),
+          },
+        },
+        '/list': {
+          get: { operationId: 'getList', responses: json({ type: 'array', items: echoSchema }) },
+        },
+        '/text': {
+          get: { operationId: 'getText', responses: json(echoSchema) },
+        },
+      },
+    }) as OpenAPIV3.Document;
+
+  describe('default', () => {
+    let clients: AnyClient[] = [];
+    beforeAll(async () => {
+      clients = await connectAll(workdir, 'structured', outputSpec());
+    }, 120_000);
+    afterAll(async () => {
+      for (const client of clients) await client.close();
+    });
+
+    it('returns JSON object responses as structuredContent too, without declaring a schema', async () => {
+      for (const client of clients) {
+        const { tools } = await client.listTools();
+        for (const tool of tools) expect(tool.outputSchema, client.label).toBeUndefined();
+
+        const result = await client.callTool('getObject', { id: 'a1' });
+        expect(result.isError ?? false, client.label).toBe(false);
+        expect(result.structuredContent, client.label).toEqual({
+          method: 'GET',
+          path: '/objects/a1',
+          query: {},
+        });
+        expect(textOf(result), client.label).toContain('"path": "/objects/a1"');
+
+        // Arrays, primitives and text stay text-only.
+        const list = await client.callTool('getList', {});
+        expect(list.structuredContent, client.label).toBeUndefined();
+        expect(textOf(list), client.label).toContain('/list');
+        const text = await client.callTool('getText', {});
+        expect(text.structuredContent, client.label).toBeUndefined();
+        expect(text.isError ?? false, client.label).toBe(false);
+
+        // Without the flag a mismatching response is still returned as is.
+        const mismatch = await client.callTool('getMismatch', {});
+        expect(mismatch.isError ?? false, client.label).toBe(false);
+      }
+    });
+  });
+
+  describe('--output-schema', () => {
+    let clients: AnyClient[] = [];
+    beforeAll(async () => {
+      clients = await connectAll(workdir, 'output-schema', outputSpec(), {
+        args: ['--output-schema'],
+      });
+    }, 120_000);
+    afterAll(async () => {
+      for (const client of clients) await client.close();
+    });
+
+    it('declares object output schemas from the first 2xx JSON response, without writeOnly properties', async () => {
+      for (const client of clients) {
+        const { tools } = await client.listTools();
+        const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+        expect(byName.getObject.outputSchema, client.label).toEqual({
+          type: 'object',
+          required: ['method', 'path'],
+          properties: {
+            method: { type: 'string', enum: ['GET'] },
+            path: { type: 'string' },
+            query: { type: 'object' },
+          },
+        });
+        expect(byName.getMismatch.outputSchema, client.label).toBeDefined();
+        // Array responses cannot be structured content, so no schema is declared.
+        expect(byName.getList.outputSchema, client.label).toBeUndefined();
+      }
+    });
+
+    it('returns conforming responses and refuses ones that violate the declared schema', async () => {
+      for (const client of clients) {
+        const ok = await client.callTool('getObject', { id: 'b2' });
+        expect(ok.isError ?? false, client.label).toBe(false);
+        expect(ok.structuredContent, client.label).toMatchObject({ path: '/objects/b2' });
+
+        const mismatch = await client.callTool('getMismatch', {});
+        expect(mismatch.isError, client.label).toBe(true);
+        expect(mismatch.structuredContent, client.label).toBeUndefined();
+        expect(textOf(mismatch), client.label).toContain(
+          "Response for tool 'getMismatch' does not match its output schema: " +
+            '(root): Instance does not have required property "missing".'
+        );
+        // The raw response is still visible to the model.
+        expect(textOf(mismatch), client.label).toContain('/mismatch');
+
+        const text = await client.callTool('getText', {});
+        expect(text.isError, client.label).toBe(true);
+        expect(textOf(text), client.label).toContain('expected a JSON object response');
+      }
+    });
   });
 });

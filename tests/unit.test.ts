@@ -24,6 +24,7 @@ import {
   getToolAnnotations,
   getToolTitle,
   filterTools,
+  getOutputSchema,
 } from '../src/parser/extract-tools.js';
 import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
 import {
@@ -355,6 +356,89 @@ describe('tag and operation filters', () => {
   it('applies the same filters through the programmatic API', async () => {
     const tools = await getToolsFromOpenApi(api, { includeTags: ['pets'], excludeTags: ['admin'] });
     expect(tools.map((t) => t.name)).toEqual(['listPets']);
+  });
+});
+
+// --- output schemas -------------------------------------------------------------
+
+describe('output schemas', () => {
+  const schema = { type: 'object', properties: { id: { type: 'integer' } } };
+  it('takes the lowest 2xx response with JSON content, objects only', () => {
+    expect(
+      getOutputSchema({
+        responses: {
+          '400': { description: 'bad', content: { 'application/json': { schema } } },
+          '202': {
+            description: 'later',
+            content: { 'application/json': { schema: { type: 'string' } } },
+          },
+          '201': {
+            description: 'created',
+            content: { 'application/json; charset=utf-8': { schema } },
+          },
+          '200': { description: 'no body' },
+        },
+      } as unknown as OpenAPIV3.OperationObject)
+    ).toEqual(schema);
+    expect(
+      getOutputSchema({
+        responses: {
+          '201': { description: 'created', content: { 'application/json': { schema } } },
+          '200': {
+            description: 'ok',
+            content: { 'application/json': { schema: { type: 'string' } } },
+          },
+        },
+      } as unknown as OpenAPIV3.OperationObject)
+    ).toBeUndefined();
+    expect(
+      getOutputSchema({
+        responses: {
+          '2XX': {
+            description: 'ok',
+            content: { 'application/json': { schema: { type: 'array' } } },
+          },
+        },
+      } as unknown as OpenAPIV3.OperationObject)
+    ).toBeUndefined();
+    expect(
+      getOutputSchema({
+        responses: { default: { description: 'ok', content: { 'application/json': { schema } } } },
+      } as unknown as OpenAPIV3.OperationObject)
+    ).toBeUndefined();
+  });
+
+  it('is emitted into generated servers only with --output-schema', () => {
+    const api = {
+      openapi: '3.0.3',
+      info: { title: 't', version: '1' },
+      paths: {
+        '/x': {
+          get: {
+            operationId: 'getX',
+            responses: {
+              '200': { description: 'ok', content: { 'application/json': { schema } } },
+            },
+          },
+        },
+      },
+    } as unknown as OpenAPIV3.Document;
+    const opts = { input: 'x', output: 'y' };
+    expect(generateMcpServerCode(api, opts, 't', '1')).not.toContain('outputSchema: {');
+    expect(generateMcpServerCode(api, { ...opts, outputSchema: true }, 't', '1')).toContain(
+      'outputSchema: {"type":"object","properties":{"id":{"type":"integer"}}}'
+    );
+    const worker = (outputSchema: boolean) =>
+      generateCloudflareWorkerFiles({
+        tools: extractToolsFromApi(api),
+        serverName: 't',
+        serverVersion: '1',
+        securitySchemes: undefined,
+        baseUrl: 'https://api.example.com',
+        outputSchema,
+      }).find((f) => f.path === 'src/tools.ts')!.content;
+    expect(worker(false)).not.toContain('outputSchema: {');
+    expect(worker(true)).toContain('outputSchema: {');
   });
 });
 

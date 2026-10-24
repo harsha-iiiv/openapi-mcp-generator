@@ -801,14 +801,31 @@ ${headerPassthroughCode}
          responseText = \`(Status: \${response.status} - No body content)\`; 
     }
     
-    // Return formatted response
-    return { 
-        content: [ 
-            { 
-                type: "text", 
-                text: \`API Response (Status: \${response.status}):\\n\${responseText}\` 
-            } 
-        ], 
+    const text = \`API Response (Status: \${response.status}):\\n\${responseText}\`;
+
+    // A JSON object response is also returned as structuredContent (text unchanged).
+    const structuredContent =
+        contentType.includes('application/json') &&
+        typeof response.data === 'object' && response.data !== null && !Array.isArray(response.data)
+            ? (response.data as Record<string, unknown>)
+            : undefined;
+
+    // With a declared outputSchema (--output-schema), never return a result that violates it.
+    if (definition.outputSchema !== undefined) {
+        const outputError = structuredContent === undefined
+            ? 'expected a JSON object response'
+            : validateToolOutput(toolName, definition.outputSchema, structuredContent);
+        if (outputError) {
+            return {
+                isError: true,
+                content: [{ type: 'text', text: \`Response for tool '\${toolName}' does not match its output schema: \${outputError}\\n\\n\${text}\` }],
+            };
+        }
+    }
+
+    return {
+        content: [{ type: 'text', text }],
+        ...(structuredContent !== undefined && { structuredContent }),
     };
 
   } catch (error: unknown) {

@@ -92,6 +92,11 @@ export interface CliOptions {
   includeOperations?: string[];
   /** Drop these operations (operationId or generated tool name). Wins over inclusions. */
   excludeOperations?: string[];
+  /**
+   * Declare each tool's outputSchema from its first 2xx application/json response
+   * schema (object schemas only) and validate responses against it. Default false.
+   */
+  outputSchema?: boolean;
 }
 
 /**
@@ -147,6 +152,12 @@ export interface McpToolDefinition {
   deprecated?: boolean;
   /** Behavior hints derived from the HTTP method, overridable with `x-mcp-annotations` */
   annotations?: McpToolAnnotations;
+  /**
+   * JSON Schema of the first (lowest) 2xx `application/json` response, when it describes
+   * an object (writeOnly properties removed). Generated servers declare it as the
+   * tool's outputSchema only with --output-schema.
+   */
+  outputSchema?: JSONSchema7;
 }
 
 /**

@@ -199,6 +199,26 @@ export function getToolAnnotations(method: string, operation: object): McpToolAn
 }
 
 /**
+ * Output schema for an operation: the schema of its first (lowest) 2xx response
+ * with `application/json` content, mapped as a response (writeOnly properties
+ * dropped). Only object schemas qualify, because MCP structured content is a
+ * JSON object.
+ */
+export function getOutputSchema(operation: OpenAPIV3.OperationObject): JSONSchema7 | undefined {
+  for (const [status, responseOrRef] of Object.entries(operation.responses ?? {})) {
+    if (!/^2(\d\d|XX)$/i.test(status)) continue;
+    const response = responseOrRef as OpenAPIV3.ResponseObject;
+    const mediaType = Object.entries(response?.content ?? {}).find(([type]) =>
+      /^application\/json\b/i.test(type)
+    )?.[1];
+    if (!mediaType?.schema) continue;
+    const mapped = mapOpenApiSchemaToJsonSchema(mediaType.schema, { direction: 'response' });
+    return typeof mapped === 'object' && mapped.type === 'object' ? mapped : undefined;
+  }
+  return undefined;
+}
+
+/**
  * Display title for an operation: `x-mcp-title`, else the trimmed summary.
  */
 export function getToolTitle(operation: object): string | undefined {
@@ -333,6 +353,7 @@ export function extractToolsFromApi(
       const serverUrl = server?.url ? normalizeUrl(resolveServerUrl(server)) : undefined;
 
       const title = getToolTitle(operation);
+      const outputSchema = getOutputSchema(operation);
       tools.push({
         name: finalToolName,
         ...(title !== undefined && { title }),
@@ -349,6 +370,7 @@ export function extractToolsFromApi(
         tags,
         deprecated,
         annotations: getToolAnnotations(method, operation),
+        ...(outputSchema !== undefined && { outputSchema }),
       });
     }
   }

@@ -69,6 +69,10 @@ export function generateToolDefinitionMap(
       const titleLine =
         tool.title !== undefined ? `\n    title: ${JSON.stringify(tool.title)},` : '';
       const annotationsString = JSON.stringify(tool.annotations ?? {});
+      const outputSchemaLine =
+        tool.outputSchema !== undefined
+          ? `,\n    outputSchema: ${JSON.stringify(tool.outputSchema)}`
+          : '';
 
       // Build the tool definition entry
       return `
@@ -83,10 +87,18 @@ export function generateToolDefinitionMap(
     securityRequirements: ${securityReqsString},
     tags: ${tagsString},
     deprecated: ${tool.deprecated ? 'true' : 'false'},
-    annotations: ${annotationsString}
+    annotations: ${annotationsString}${outputSchemaLine}
   }],`;
     })
     .join('');
+}
+
+/**
+ * Returns the tools without their output schemas, for servers generated
+ * without --output-schema.
+ */
+export function withoutOutputSchemas(tools: McpToolDefinition[]): McpToolDefinition[] {
+  return tools.map(({ outputSchema: _outputSchema, ...tool }) => tool);
 }
 
 /**
@@ -102,6 +114,7 @@ server.setRequestHandler('tools/list', async () => {
     ...(def.title !== undefined && { title: def.title }),
     description: def.description,
     inputSchema: def.inputSchema,
+    ...(def.outputSchema !== undefined && { outputSchema: def.outputSchema }),
     annotations: def.annotations
   }));
   return { tools: toolsForClient };
@@ -189,6 +202,15 @@ function formatSchemaErrors(errors: OutputUnit[]): string {
         if (!messages.includes(message)) messages.push(message);
     }
     return messages.join('; ');
+}
+
+/**
+ * Validates a structured result against the tool's declared output schema.
+ * Returns a readable error message, or null when it conforms.
+ */
+function validateToolOutput(toolName: string, outputSchema: unknown, value: unknown): string | null {
+    const result = getSchemaValidator(\`output:\${toolName}\`, outputSchema).validate(value);
+    return result.valid ? null : formatSchemaErrors(result.errors);
 }
 
 /**

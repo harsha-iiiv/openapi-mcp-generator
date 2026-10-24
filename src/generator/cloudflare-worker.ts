@@ -15,6 +15,7 @@ import {
   generateSchemaValidationCode,
   generateServerUrlResolutionCode,
   generateToolDefinitionMap,
+  withoutOutputSchemas,
 } from '../utils/code-gen.js';
 import { generateWorkerPlaygroundModule } from './playground.js';
 
@@ -37,6 +38,8 @@ export interface CloudflareWorkerGenInput {
   headerPassthrough?: string[];
   /** Server instructions for clients (bounded info.description); omitted when empty. */
   instructions?: string;
+  /** Declare and enforce each tool's outputSchema (--output-schema). Default false. */
+  outputSchema?: boolean;
 }
 
 /** Lower-cased, de-duplicated passthrough header names. */
@@ -89,7 +92,8 @@ dist/
 }
 
 export function generateWorkerToolsFile(input: CloudflareWorkerGenInput): string {
-  const mapEntries = generateToolDefinitionMap(input.tools, input.securitySchemes);
+  const tools = input.outputSchema ? input.tools : withoutOutputSchemas(input.tools);
+  const mapEntries = generateToolDefinitionMap(tools, input.securitySchemes);
 
   return `/**
  * Tool definitions for the generated MCP Worker.
@@ -109,6 +113,7 @@ export interface McpToolDefinition {
   securityRequirements: any[];
   tags: string[];
   deprecated: boolean;
+  outputSchema?: any;
   annotations: {
     readOnlyHint?: boolean;
     destructiveHint?: boolean;
@@ -320,6 +325,7 @@ function createServer(env: Env, forwardedHeaders: Record<string, string>): Serve
       ...(def.title !== undefined && { title: def.title }),
       description: def.description,
       inputSchema: def.inputSchema,
+      ...(def.outputSchema !== undefined && { outputSchema: def.outputSchema }),
       annotations: def.annotations,
     })),
   }));
@@ -396,7 +402,7 @@ async function executeApiTool(
   args: Record<string, unknown>,
   env: Env,
   forwardedHeaders: Record<string, string>
-): Promise<{ content: { type: 'text'; text: string }[]; isError?: boolean }> {
+): Promise<CallToolResult> {
   try {
     // Operation and path-item servers win over the configured base URL.
     const baseUrl = resolveOperationBaseUrl(
@@ -498,7 +504,43 @@ async function executeApiTool(
     const pretty = contentType.includes('json')
       ? safePrettyJson(text)
       : text;
-    return { content: [{ type: 'text', text: pretty }] };
+
+    // A JSON object response is also returned as structuredContent (text unchanged).
+    let structuredContent: Record<string, unknown> | undefined;
+    if (contentType.includes('json')) {
+      try {
+        const parsed: unknown = JSON.parse(text);
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          structuredContent = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // not JSON after all: text only
+      }
+    }
+
+    // With a declared outputSchema (--output-schema), never return a result that violates it.
+    if (def.outputSchema !== undefined) {
+      const outputError =
+        structuredContent === undefined
+          ? 'expected a JSON object response'
+          : validateToolOutput(def.name, def.outputSchema, structuredContent);
+      if (outputError) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: \`Response for tool '\${def.name}' does not match its output schema: \${outputError}\n\n\${pretty}\`,
+            },
+          ],
+        };
+      }
+    }
+
+    return {
+      content: [{ type: 'text', text: pretty }],
+      ...(structuredContent !== undefined && { structuredContent }),
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { isError: true, content: [{ type: 'text', text: \`Tool execution failed: \${message}\` }] };

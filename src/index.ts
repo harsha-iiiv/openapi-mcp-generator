@@ -172,6 +172,10 @@ program
     'Comma-separated operationIds or tool names to skip. Exclusions win over inclusions.',
     parseList
   )
+  .option(
+    '--output-schema',
+    "Declare each tool's outputSchema from its first 2xx application/json response schema (object schemas only) and return a tool error when a response does not match it. Default: false."
+  )
   .option('--force', 'Overwrite existing files without prompting')
   .version(pkg.version) // Match package.json version
   .action((options) => {
@@ -384,6 +388,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         inboundAuth,
         headerPassthrough: options.headerPassthrough,
         instructions: getServerInstructions(api.info?.description),
+        outputSchema: Boolean(options.outputSchema),
       });
 
       // Each file's parent directory is created per-iteration below, so no
