@@ -64,7 +64,8 @@ openapi-mcp-generator --input path/to/openapi.json --output path/to/output/dir -
 | `--default-include`      |       | Default behavior for x-mcp filtering. Accepts `true` or `false` (case-insensitive). `true` = include by default, `false` = exclude by default. | `true`                            |
 | `--allow-external-refs`  |       | Allow resolving external `http(s)` `$ref` references in the spec. Disabled by default to prevent SSRF during parsing.                          | `false`                           |
 | `--max-tool-name-length` |       | Maximum length for generated tool names (Claude Desktop caps at 64). Longer names are truncated with a hash suffix.                            | `64`                              |
-| `--header-passthrough`   |       | Comma-separated inbound header names to forward to the upstream API (web/streamable-http). Enables per-user API keys via MCP client headers.   | _(none)_                          |
+| `--header-passthrough`   |       | Comma-separated inbound header names to forward to the upstream API (web, streamable-http, cloudflare-worker). Enables per-user API keys.      | _(none)_                          |
+| `--inbound-auth`         |       | Inbound auth for HTTP transports: `none` or `bearer`. With `bearer`, clients must send `Authorization: Bearer <token>` (`MCP_AUTH_TOKEN`).     | `none`                            |
 | `--insecure`             | `-k`  | Allow insecure HTTPS connections (skip TLS certificate verification) in the generated server.                                                  | `false`                           |
 | `--generate-lib`         |       | Generate library-style output: export `main()` instead of auto-invoking it, omitting signal/cleanup wiring.                                    | `false`                           |
 | `--custom-auth`          |       | Generate an editable `src/auth.ts` hook (`applyCustomAuth`) called before built-in auth; return `true` to skip built-in auth.                  | `false`                           |
@@ -172,8 +173,9 @@ Highlights:
 - Lean dependencies: just `@modelcontextprotocol/sdk` and `zod` — no extra agent framework.
 - Non-secret config (e.g. `API_BASE_URL`) lives in `wrangler.jsonc` under `vars`; secrets are set with `wrangler secret put` and read from the `env` binding — never committed.
 - Workers-native runtime: global `fetch` (no Node `https`), and argument validation uses build-time-emitted zod (no runtime `eval`).
-- Auth is scheme-aware: API key (header/query/cookie), HTTP basic/bearer, and OAuth2 client-credentials are derived from `env` secrets.
-- `--header-passthrough`, `--custom-auth`, `--port`, `--insecure`, `--generate-lib`, and `--oauth-creds-in-body` do not apply to this target and are ignored with a warning.
+- Auth is scheme-aware: API key (header/query/cookie), HTTP basic/bearer, OpenID Connect tokens, and OAuth2 client-credentials are derived from `env` secrets, following OpenAPI security requirement semantics (see [Securing HTTP servers](#-securing-http-servers)).
+- `--inbound-auth bearer` protects `/mcp` with a token from `wrangler secret put MCP_AUTH_TOKEN`; `--header-passthrough` forwards per-user upstream keys from the client.
+- `--custom-auth`, `--port`, `--insecure`, `--generate-lib`, and `--oauth-creds-in-body` do not apply to this target and are ignored with a warning.
 
 Local development: `cp .dev.vars.example .dev.vars`, fill in secrets, then `npm run dev` (serves `http://localhost:8787/mcp`). Connect with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or, from Claude Desktop, via [mcp-remote](https://www.npmjs.com/package/mcp-remote).
 
@@ -205,6 +207,50 @@ Configure auth credentials in your environment:
 | Bearer     | `BEARER_TOKEN_<SCHEME_NAME>`                                                                       |
 | Basic Auth | `BASIC_USERNAME_<SCHEME_NAME>`, `BASIC_PASSWORD_<SCHEME_NAME>`                                     |
 | OAuth2     | `OAUTH_CLIENT_ID_<SCHEME_NAME>`, `OAUTH_CLIENT_SECRET_<SCHEME_NAME>`, `OAUTH_SCOPES_<SCHEME_NAME>` |
+| OpenID     | `OPENID_TOKEN_<SCHEME_NAME>`                                                                       |
+
+When an operation lists several security requirements, the first one whose schemes are all
+configured is used. OAuth2 tokens are requested with the operation's scopes unless
+`OAUTH_SCOPES_<SCHEME_NAME>` overrides them. The Cloudflare Worker target reads the same
+credentials from Wrangler secrets named `<SCHEME_NAME>_API_KEY`, `<SCHEME_NAME>_TOKEN`,
+`<SCHEME_NAME>_USERNAME`/`_PASSWORD` and `<SCHEME_NAME>_CLIENT_ID`/`_CLIENT_SECRET` (see the
+generated `.dev.vars.example`).
+
+---
+
+## 🔒 Securing HTTP servers
+
+Generated `web`, `streamable-http` and `cloudflare-worker` servers expose a network endpoint.
+If they also hold upstream credentials, anyone who reaches the endpoint can spend them, so the
+generator warns when you generate such a server without protection.
+
+**Require a token** with `--inbound-auth bearer`:
+
+```bash
+openapi-mcp-generator -i openapi.json -o my-mcp -t streamable-http --inbound-auth bearer
+openssl rand -hex 32   # put the value in .env as MCP_AUTH_TOKEN (Workers: wrangler secret put MCP_AUTH_TOKEN)
+```
+
+- Every MCP request must send `Authorization: Bearer <token>`; others get `401` before any tool
+  runs. `/health` stays public.
+- Tokens are read at runtime, never written into generated files, and compared in constant time.
+  Rotate without downtime with `MCP_AUTH_TOKENS=new-token,old-token`.
+- With no token configured the server fails closed with `503`.
+- Streamable HTTP and SSE sessions are bound to the token that opened them; replaying a session
+  ID with another token is answered `404`.
+- Clients that accept custom headers (Claude Code, Cursor, VS Code, MCP Inspector, `mcp-remote`)
+  send the token directly. Claude.ai and ChatGPT connectors use OAuth or no auth; put those
+  behind an OAuth-capable gateway.
+
+**Let each user bring their own upstream key** with `--header-passthrough X-API-Key`: the listed
+headers are forwarded per request, so the server stores no shared secret. Passthrough cannot
+forward `Authorization` while `--inbound-auth bearer` is on, because that header carries the MCP
+token.
+
+`--inbound-auth` has no effect on `stdio`: a stdio server has no network endpoint, and only the
+process that launches it can talk to it.
+
+Found a vulnerability? See [SECURITY.md](./SECURITY.md).
 
 ---
 
