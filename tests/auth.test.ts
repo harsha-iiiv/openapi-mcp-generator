@@ -640,9 +640,10 @@ describe('#81 security requirements: generated Node server (stdio)', () => {
     expect(failed.headers['authorization']).toBeUndefined();
   });
 
-  it('reports unknown tools and upstream failures as tool errors (isError)', async () => {
-    const unknown = await client.callTool({ name: 'no_such_tool', arguments: {} });
-    expect(unknown.isError).toBe(true);
+  it('rejects unknown tools with a JSON-RPC protocol error (-32602)', async () => {
+    await expect(client.callTool({ name: 'no_such_tool', arguments: {} })).rejects.toMatchObject({
+      code: -32602,
+    });
   });
 
   it('serves a 2026-07-28 client over stdio (server/discover, per-request metadata)', async () => {

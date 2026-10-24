@@ -112,8 +112,9 @@ server.setRequestHandler('tools/call', async (request: CallToolRequest): Promise
   const { name: toolName, arguments: toolArgs } = request.params;
   const toolDefinition = toolDefinitionMap.get(toolName);
   if (!toolDefinition) {
+    // An unknown tool is a protocol error (JSON-RPC -32602), not a tool result.
     console.error(\`Error: Unknown tool requested: \${toolName}\`);
-    return { isError: true, content: [{ type: "text", text: \`Error: Unknown tool requested: \${toolName}\` }] };
+    throw new ProtocolError(ProtocolErrorCode.InvalidParams, \`Unknown tool: \${toolName}\`);
   }
   return await executeApiTool(toolName, toolDefinition, toolArgs ?? {}, securitySchemes);
 });

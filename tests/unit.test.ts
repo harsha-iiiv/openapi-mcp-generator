@@ -884,9 +884,8 @@ describe('cloudflare-worker target', () => {
     });
     const index = fileContent(files, 'src/index.ts');
 
-    expect(index).toContain(
-      "import { createMcpHandler, Server, type CallToolResult } from '@modelcontextprotocol/server'"
-    );
+    expect(index).toContain("from '@modelcontextprotocol/server'");
+    expect(index).toContain('createMcpHandler,');
     expect(index).toContain("const MCP_ROUTE = '/mcp'");
     // One handler per request serves MCP 2026-07-28 and 2025-era clients.
     expect(index).toContain(

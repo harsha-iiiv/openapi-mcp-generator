@@ -153,7 +153,7 @@ main().catch((error) => {
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { Server, type Tool, type CallToolResult, type CallToolRequest } from "@modelcontextprotocol/server";${stdioImport}${transportImport}
+import { Server, ProtocolError, ProtocolErrorCode, type Tool, type CallToolResult, type CallToolRequest } from "@modelcontextprotocol/server";${stdioImport}${transportImport}
 
 import { Validator, type OutputUnit } from '@cfworker/json-schema';
 import axios, { type AxiosRequestConfig, type AxiosError } from 'axios';

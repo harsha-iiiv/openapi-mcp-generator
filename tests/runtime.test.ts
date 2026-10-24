@@ -262,6 +262,37 @@ afterAll(async () => {
 
 // --- argument validation ----------------------------------------------------------
 
+describe('spec-correct errors', () => {
+  let clients: AnyClient[] = [];
+
+  beforeAll(async () => {
+    clients = await connectAll(workdir, 'errors', featureSpec(upstream.url));
+  }, 120_000);
+
+  afterAll(async () => {
+    for (const client of clients) await client.close();
+  });
+
+  it('answers an unknown tool with JSON-RPC -32602, not a tool result', async () => {
+    for (const client of clients) {
+      const error = await client.callTool('noSuchTool', {}).then(
+        () => undefined,
+        (e: unknown) => e as { code?: number; message?: string }
+      );
+      expect(error, client.label).toBeDefined();
+      expect(error?.code, client.label).toBe(-32602);
+      expect(error?.message, client.label).toContain('Unknown tool: noSuchTool');
+    }
+  });
+
+  it('keeps invalid arguments as tool execution errors (isError)', async () => {
+    for (const client of clients) {
+      const result = await client.callTool('getPet', { petId: 'x' });
+      expect(result.isError, client.label).toBe(true);
+    }
+  });
+});
+
 describe('input schema fidelity seen by clients', () => {
   let clients: AnyClient[] = [];
 
