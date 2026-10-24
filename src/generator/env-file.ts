@@ -4,12 +4,14 @@
 import { OpenAPIV3 } from 'openapi-types';
 import { InboundAuthMode } from '../types/index.js';
 import { getEnvVarName } from '../utils/security.js';
-import { generateInboundAuthEnvDoc } from './inbound-auth.js';
+import { generateAllowedOriginsEnvDoc, generateInboundAuthEnvDoc } from './inbound-auth.js';
 
 /** Options affecting the generated .env.example. */
 export interface EnvExampleOptions {
   /** Document the inbound MCP token when HTTP inbound auth is enabled (issue #80). */
   inboundAuth?: InboundAuthMode;
+  /** Document MCP_ALLOWED_ORIGINS (Node HTTP transports). */
+  httpTransport?: boolean;
 }
 
 /**
@@ -74,6 +76,7 @@ API_BASE_URL=your_api_base_url_here
     content += `# No API authentication required\n`;
   }
 
+  if (options.httpTransport) content += generateAllowedOriginsEnvDoc();
   content += generateInboundAuthEnvDoc(options.inboundAuth);
 
   content += `\n# Add any other environment variables your API might need\n`;

@@ -15,7 +15,7 @@ export function isInboundAuthEnabled(mode?: InboundAuthMode): boolean {
 
 /** Top-of-module imports needed by the Node inbound-auth middleware. */
 export function generateNodeInboundAuthImports(mode?: InboundAuthMode): string {
-  if (!isInboundAuthEnabled(mode)) return '';
+  if (!isInboundAuthEnabled(mode)) return `\nimport type { MiddlewareHandler } from 'hono';`;
   return `
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';`;
@@ -80,20 +80,87 @@ function createInboundAuthMiddleware(): MiddlewareHandler<{ Variables: { inbound
 }
 
 /**
- * `app.use(...)` lines protecting the given routes (empty when disabled).
- * Must be emitted after CORS (so preflight requests are answered) and before
- * the route handlers.
+ * Origin validation for generated Node HTTP servers (always on).
+ *
+ * The MCP Streamable HTTP binding requires servers to validate the Origin header
+ * to prevent DNS rebinding: a web page that rebinds its hostname to 127.0.0.1
+ * could otherwise drive a local server, and the upstream credentials it holds,
+ * from the user's browser. Requests without Origin (non-browser MCP clients)
+ * pass; browser requests must come from a loopback origin or one listed in
+ * MCP_ALLOWED_ORIGINS.
+ */
+export function generateNodeOriginGuard(): string {
+  return `
+/**
+ * DNS-rebinding protection: rejects browser requests from origins that are not
+ * loopback and not listed in MCP_ALLOWED_ORIGINS (comma-separated, exact origins
+ * such as https://app.example.com). Requests without an Origin header pass.
+ */
+function createOriginGuard(): MiddlewareHandler {
+  const allowed = new Set(
+    (process.env.MCP_ALLOWED_ORIGINS ?? '')
+      .split(',')
+      .map((origin) => origin.trim().replace(/\\/+$/, ''))
+      .filter(Boolean)
+  );
+  const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+  return async (c, next) => {
+    const origin = c.req.header('origin');
+    if (origin !== undefined) {
+      let host = '';
+      try {
+        host = new URL(origin).hostname;
+      } catch {
+        // "null" and malformed origins fall through to the rejection below.
+      }
+      if (!loopbackHosts.has(host) && !allowed.has(origin.replace(/\\/+$/, ''))) {
+        return c.json(
+          {
+            jsonrpc: '2.0',
+            error: { code: -32000, message: 'Forbidden: origin not allowed (set MCP_ALLOWED_ORIGINS).' },
+            id: null,
+          },
+          403
+        );
+      }
+    }
+    await next();
+  };
+}
+`;
+}
+
+/**
+ * `app.use(...)` lines guarding the MCP routes: the Origin check always, and the
+ * bearer-token check when inbound auth is enabled. Must be emitted after CORS
+ * (so preflight requests are answered) and before the route handlers.
  */
 export function generateNodeInboundAuthMounts(
   mode: InboundAuthMode | undefined,
   routes: string[]
 ): string {
-  if (!isInboundAuthEnabled(mode)) return '';
-  const mounts = routes.map((route) => `  app.use('${route}', requireInboundAuth);`).join('\n');
-  return `
+  const originMounts = routes.map((route) => `  app.use('${route}', originGuard);`).join('\n');
+  const authBlock = isInboundAuthEnabled(mode)
+    ? `
   // Inbound authentication (--inbound-auth bearer); /health stays public.
   const requireInboundAuth = createInboundAuthMiddleware();
-${mounts}
+${routes.map((route) => `  app.use('${route}', requireInboundAuth);`).join('\n')}
+`
+    : '';
+  return `
+  // DNS-rebinding protection: browser requests need a loopback or allowed origin.
+  const originGuard = createOriginGuard();
+${originMounts}
+${authBlock}`;
+}
+
+/** .env.example block for browser origins allowed by the Origin check (Node HTTP transports). */
+export function generateAllowedOriginsEnvDoc(): string {
+  return `
+# Browser origins allowed to call the MCP endpoint, comma-separated (for example
+# https://app.example.com). Loopback origins are always allowed, and clients that
+# send no Origin header (most MCP clients) are unaffected.
+MCP_ALLOWED_ORIGINS=
 `;
 }
 

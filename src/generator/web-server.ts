@@ -6,6 +6,7 @@ import {
   generateNodeInboundAuthImports,
   generateNodeInboundAuthMiddleware,
   generateNodeInboundAuthMounts,
+  generateNodeOriginGuard,
 } from './inbound-auth.js';
 
 /**
@@ -41,7 +42,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 // Import server configuration constants
 import { SERVER_NAME, SERVER_VERSION } from './index.js';${headerStoreImport}${generateNodeInboundAuthImports(inboundAuth)}
-${generateNodeInboundAuthMiddleware(inboundAuth)}
+${generateNodeOriginGuard()}${generateNodeInboundAuthMiddleware(inboundAuth)}
 /**
 * Custom SSE Transport implementation using Hono's streaming API
 */

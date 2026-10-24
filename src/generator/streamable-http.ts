@@ -6,6 +6,7 @@ import {
   generateNodeInboundAuthImports,
   generateNodeInboundAuthMiddleware,
   generateNodeInboundAuthMounts,
+  generateNodeOriginGuard,
 } from './inbound-auth.js';
 
 /**
@@ -71,7 +72,7 @@ interface Session {
   transport: WebStandardStreamableHTTPServerTransport;
   principal?: string;
 }
-${generateNodeInboundAuthMiddleware(inboundAuth)}${collectHeadersFn}
+${generateNodeOriginGuard()}${generateNodeInboundAuthMiddleware(inboundAuth)}${collectHeadersFn}
 /** JSON-RPC error body for transport-level failures. */
 function jsonRpcError(code: number, message: string) {
   return { jsonrpc: '2.0' as const, error: { code, message }, id: null };

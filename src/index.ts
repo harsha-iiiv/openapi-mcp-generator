@@ -411,6 +411,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     console.error('Generating .env.example file...');
     const envExampleContent = generateEnvExample(api.components?.securitySchemes, {
       inboundAuth: HTTP_TRANSPORTS.includes(transport) ? inboundAuth : 'none',
+      httpTransport: transport === 'web' || transport === 'streamable-http',
     });
 
     console.error('Generating OAuth2 documentation...');

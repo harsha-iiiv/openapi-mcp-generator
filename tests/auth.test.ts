@@ -704,6 +704,37 @@ describe('#80 inbound auth: generated Node HTTP servers', () => {
     await Promise.all([a.client.close(), b.client.close()]);
   }, 60_000);
 
+  it('streamable-http: rejects browser requests from non-allowed origins (DNS rebinding)', async () => {
+    const port = await freePort();
+    const child = startNodeServer(httpDir, {
+      PORT: String(port),
+      MCP_AUTH_TOKEN: token,
+      MCP_ALLOWED_ORIGINS: 'https://app.example.com',
+      API_BASE_URL: upstream.url,
+    });
+    children.push(child);
+    await waitForHealth(port, child);
+    const post = (headers: Record<string, string>) =>
+      fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: `Bearer ${token}`,
+          ...headers,
+        },
+        body: JSON.stringify(initializeBody),
+      });
+    expect((await post({ origin: 'http://evil.example:3000' })).status).toBe(403);
+    expect((await post({ origin: 'null' })).status).toBe(403);
+    expect((await post({ origin: 'http://localhost:5173' })).status).toBe(200);
+    expect((await post({ origin: 'https://app.example.com' })).status).toBe(200);
+    expect((await post({})).status).toBe(200);
+    expect(fs.readFileSync(path.join(httpDir, '.env.example'), 'utf8')).toMatch(
+      /^MCP_ALLOWED_ORIGINS=$/m
+    );
+  }, 60_000);
+
   it('streamable-http: fails closed (503) when MCP_AUTH_TOKEN is missing', async () => {
     const port = await freePort();
     const child = startNodeServer(httpDir, { PORT: String(port), API_BASE_URL: upstream.url });
