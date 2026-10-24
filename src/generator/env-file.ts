@@ -76,7 +76,14 @@ API_BASE_URL=your_api_base_url_here
     content += `# No API authentication required\n`;
   }
 
-  if (options.httpTransport) content += generateAllowedOriginsEnvDoc();
+  if (options.httpTransport) {
+    content += generateAllowedOriginsEnvDoc();
+    content += `
+# The browser playground at http://localhost:<port>/ lists and calls tools.
+# Set to off to stop serving it (for example in production).
+MCP_PLAYGROUND=
+`;
+  }
   content += generateInboundAuthEnvDoc(options.inboundAuth);
 
   content += `\n# Add any other environment variables your API might need\n`;

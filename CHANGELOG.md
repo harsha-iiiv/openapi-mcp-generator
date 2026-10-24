@@ -24,6 +24,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Verified with the official v2 client pinned to 2026-07-28 on stdio, Streamable HTTP and the
   Worker, and with the v1 client for the 2025 era.
 
+### Added
+
+- A browser playground for generated `web`, `streamable-http` and `cloudflare-worker` servers,
+  served at `/`. It lists tools, builds a form from each input schema (enums, numbers, booleans,
+  lists, JSON bodies with a schema example), runs them and shows every JSON-RPC message, with
+  copy-as-curl and client configs for Claude Code, Cursor, VS Code and the MCP Inspector. It
+  supports `--inbound-auth bearer` tokens, explains 401, 403 (`MCP_ALLOWED_ORIGINS`) and expired
+  sessions (on servers that use them), and follows light and dark mode. The page and
+  its dependency-free MCP client live in `playground/` and are tested against real generated
+  servers; the same files are hosted at https://mcp.pidata.tech/playground. `MCP_PLAYGROUND=off`
+  turns it off.
+- Generated Workers answer CORS on `/mcp` (preflight plus `Access-Control-Allow-Origin: *` on
+  every response, including 401s), so browser-based MCP clients can reach them. Access is still
+  controlled by the `Authorization` header. Passthrough headers are included in the allowed list.
+
+### Fixed
+
+- The browser test page of `web` and `streamable-http` servers was never served: `GET /` answered
+  `404` because the static handler looked for `public/` outside the project. It is replaced by the
+  playground, served from a fixed list of files with security headers.
+- The old test pages could not talk MCP: they sent `initialize` without a protocol version or the
+  required `Accept` header and called `listTools` / `callTool` instead of `tools/list` /
+  `tools/call`. They also inserted server output into the page as HTML.
+- Node HTTP servers expose `mcp-protocol-version` and `WWW-Authenticate` to browser clients.
+- OpenAPI 3.0 boolean `exclusiveMinimum` and `exclusiveMaximum` are converted to JSON Schema
+  numeric bounds, including inside nested schemas (`allOf`/`anyOf`/`oneOf`, `not`,
+  `additionalProperties`, nullable objects). Thanks @sean0407 (#77, #87).
+
 ### Upgrading from 4.x
 
 1. Commit or back up your generated project. Regenerating with `--force` overwrites generated

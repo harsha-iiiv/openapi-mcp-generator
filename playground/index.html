@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="referrer" content="no-referrer" />
+    <title>MCP playground</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 7.5h5.5M4 12h3.5M4 16.5h5.5M12.5 7.5 17 12l-4.5 4.5'/%3E%3Ccircle cx='19.5' cy='12' r='1.4' fill='%230f766e' stroke='none'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="playground.css" />
+    <script type="module" src="playground.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="bar">
+      <div class="brand">
+        <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7.5h5.5M4 12h3.5M4 16.5h5.5" />
+          <path d="M12.5 7.5 17 12l-4.5 4.5" />
+          <circle cx="19.5" cy="12" r="1.25" />
+        </svg>
+        <div class="brand-text">
+          <span id="server-name" class="server-name">MCP playground</span>
+          <span id="server-meta" class="server-meta"></span>
+        </div>
+      </div>
+      <div class="bar-right">
+        <span id="status" class="status" data-state="idle" role="status" aria-live="polite"
+          ><i aria-hidden="true"></i><span id="status-text">Not connected</span></span
+        >
+        <button id="btn-clients" class="btn ghost small" type="button" hidden>
+          Connect a client
+        </button>
+        <button id="btn-disconnect" class="btn ghost small" type="button" hidden>Disconnect</button>
+      </div>
+    </header>
+
+    <main id="main" tabindex="-1">
+      <section id="connect" class="connect" aria-labelledby="connect-title">
+        <div class="connect-card">
+          <p class="eyebrow">MCP playground</p>
+          <h1 id="connect-title">Try every tool before you wire up a client.</h1>
+          <p class="lede">
+            Lists the server's tools, builds a form from each input schema and shows exactly what
+            goes over the wire. Requests go straight from this browser to the server.
+          </p>
+          <form id="connect-form" class="connect-form" novalidate>
+            <div class="field" id="url-field" hidden>
+              <label for="url">Server URL</label>
+              <input
+                id="url"
+                type="url"
+                inputmode="url"
+                spellcheck="false"
+                autocomplete="url"
+                placeholder="https://your-server.example.workers.dev/mcp"
+              />
+            </div>
+            <div class="field" id="transport-field" hidden>
+              <label for="transport">Transport</label>
+              <select id="transport">
+                <option value="streamable-http">Streamable HTTP</option>
+                <option value="sse">HTTP+SSE (legacy)</option>
+              </select>
+            </div>
+            <div class="endpoint" id="endpoint-row">
+              <span class="endpoint-label">Endpoint</span>
+              <code id="endpoint"></code>
+              <span id="transport-name" class="chip"></span>
+            </div>
+            <div class="field" id="token-field">
+              <label for="token"
+                >Bearer token <span class="hint" id="token-hint">optional</span></label
+              >
+              <div class="input-row">
+                <input
+                  id="token"
+                  type="password"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="Value of MCP_AUTH_TOKEN"
+                />
+                <button type="button" id="btn-reveal" class="btn ghost small" aria-pressed="false">
+                  Show
+                </button>
+              </div>
+              <label class="check"
+                ><input type="checkbox" id="remember" /> Remember in this tab</label
+              >
+            </div>
+            <div class="actions">
+              <button id="btn-connect" class="btn primary" type="submit">Connect</button>
+            </div>
+            <p id="connect-error" class="alert" role="alert" hidden></p>
+          </form>
+          <p class="fine">
+            Open source, part of
+            <a
+              href="https://github.com/harsha-iiiv/openapi-mcp-generator"
+              target="_blank"
+              rel="noopener noreferrer"
+              >openapi-mcp-generator</a
+            >. Your token never leaves this tab except as the Authorization header sent to this
+            server.
+          </p>
+        </div>
+      </section>
+
+      <section id="workspace" class="workspace" hidden>
+        <aside class="sidebar" aria-label="Tools">
+          <div class="search">
+            <input
+              id="search"
+              type="search"
+              placeholder="Search tools"
+              aria-label="Search tools"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <kbd aria-hidden="true">/</kbd>
+          </div>
+          <p id="tool-count" class="count"></p>
+          <div
+            id="tool-list"
+            class="tool-list"
+            role="listbox"
+            aria-label="Tools"
+            tabindex="0"
+          ></div>
+        </aside>
+        <section class="detail">
+          <div id="empty" class="empty"><p>Pick a tool on the left.</p></div>
+          <article id="tool" class="tool" hidden>
+            <header class="tool-head">
+              <div class="tool-title">
+                <h2 id="tool-name"></h2>
+                <div id="tool-tags" class="tags"></div>
+              </div>
+              <div class="tool-actions">
+                <button id="btn-raw" class="btn ghost small" type="button" aria-pressed="false">
+                  Edit as JSON
+                </button>
+                <button id="btn-curl" class="btn ghost small" type="button">Copy as curl</button>
+              </div>
+            </header>
+            <p id="tool-desc" class="desc"></p>
+            <form id="tool-form" class="tool-form" novalidate>
+              <div id="fields" class="fields"></div>
+              <div id="raw" class="raw" hidden>
+                <label for="raw-args">Arguments (JSON object)</label>
+                <textarea id="raw-args" spellcheck="false" rows="12"></textarea>
+              </div>
+              <div class="run">
+                <button id="btn-run" class="btn primary" type="submit">Run tool</button>
+                <span class="kbd-hint" id="kbd-hint"></span>
+                <span id="form-error" class="form-error" role="alert"></span>
+              </div>
+            </form>
+            <section id="result" class="result" hidden aria-label="Result">
+              <div class="progress" aria-hidden="true"></div>
+              <header class="result-head">
+                <span id="result-status" class="result-status"></span>
+                <div class="tabs" role="tablist" aria-label="Result view">
+                  <button
+                    role="tab"
+                    id="tab-output"
+                    aria-selected="true"
+                    data-tab="output"
+                    type="button"
+                  >
+                    Output
+                  </button>
+                  <button
+                    role="tab"
+                    id="tab-rpc"
+                    aria-selected="false"
+                    data-tab="rpc"
+                    type="button"
+                  >
+                    JSON-RPC
+                  </button>
+                </div>
+                <button id="btn-copy-result" class="btn ghost small" type="button">Copy</button>
+              </header>
+              <div
+                id="result-output"
+                class="result-body"
+                role="tabpanel"
+                aria-labelledby="tab-output"
+              ></div>
+              <div
+                id="result-rpc"
+                class="result-body"
+                role="tabpanel"
+                aria-labelledby="tab-rpc"
+                hidden
+              ></div>
+            </section>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <details id="traffic" class="traffic">
+      <summary>
+        <span class="traffic-title">Traffic</span>
+        <span id="traffic-count" class="count"></span>
+        <button id="btn-clear" class="btn ghost small" type="button">Clear</button>
+      </summary>
+      <ol id="traffic-list" class="traffic-list"></ol>
+    </details>
+
+    <dialog id="clients" class="dialog" aria-labelledby="clients-title">
+      <header class="dialog-head">
+        <h2 id="clients-title">Connect a client</h2>
+        <button id="btn-close-clients" class="btn ghost small" type="button">Close</button>
+      </header>
+      <div id="client-snippets" class="snippets"></div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

@@ -2,7 +2,8 @@
  * Generator for a Cloudflare Workers MCP server project.
  *
  * Emits a complete, deployable Worker that serves the generated MCP server over
- * Streamable HTTP at /mcp using the Cloudflare Agents SDK `createMcpHandler`.
+ * Streamable HTTP at /mcp with the MCP SDK v2 createMcpHandler (MCP 2026-07-28 and
+ * 2025-era clients, stateless), and a browser playground at /.
  * Reuses tool extraction + the shared tool-definition-map serialization; the
  * request-execution path is reimplemented Workers-native (global fetch, no
  * node:https) and argument validation uses build-time-emitted zod (no runtime eval).
@@ -11,6 +12,7 @@ import { OpenAPIV3 } from 'openapi-types';
 import { jsonSchemaToZod } from 'json-schema-to-zod';
 import { InboundAuthMode, McpToolDefinition } from '../types/index.js';
 import { generateToolDefinitionMap } from '../utils/code-gen.js';
+import { generateWorkerPlaygroundModule } from './playground.js';
 
 /** A single generated file, relative to the output project root. */
 export interface GeneratedFile {
@@ -46,6 +48,14 @@ export function generateCloudflareWorkerFiles(input: CloudflareWorkerGenInput): 
     { path: 'src/index.ts', content: generateWorkerIndex(input) },
     { path: 'src/tools.ts', content: generateWorkerToolsFile(input) },
     { path: 'src/upstream-auth.ts', content: generateWorkerUpstreamAuth(input) },
+    {
+      path: 'src/playground.ts',
+      content: generateWorkerPlaygroundModule({
+        transport: 'streamable-http',
+        endpoint: '/mcp',
+        inboundAuth: input.inboundAuth ?? 'none',
+      }),
+    },
     { path: 'wrangler.jsonc', content: generateWranglerConfig(input) },
     { path: '.dev.vars.example', content: generateDevVarsExample(input) },
     { path: '.gitignore', content: generateWorkerGitignore() },
@@ -280,14 +290,25 @@ async function checkInboundAuth(request: Request, env: Env): Promise<Response | 
 
   const inboundAuthCheck = inboundAuth
     ? `
-    // Inbound authentication (--inbound-auth bearer): refuse before any tool can run.
-    if (request.method !== 'OPTIONS') {
-      const denied = await checkInboundAuth(request, env);
-      if (denied) return denied;
-    }`
+  // Inbound authentication (--inbound-auth bearer): refuse before any tool can run.
+  const denied = await checkInboundAuth(request, env);
+  if (denied) return denied;`
     : '';
 
   const forwardedExpr = passthrough.length > 0 ? 'collectPassthroughHeaders(request)' : '{}';
+  // Browsers must be allowed to send these on cross-origin requests (MCP clients,
+  // the hosted playground). Credentials travel in headers, never cookies.
+  const corsAllowHeaders = [
+    'content-type',
+    'accept',
+    'authorization',
+    'mcp-session-id',
+    'mcp-protocol-version',
+    'mcp-method',
+    'mcp-name',
+    'last-event-id',
+    ...passthrough,
+  ];
 
   return `/**
  * Cloudflare Worker MCP server (Streamable HTTP at /mcp).
@@ -297,6 +318,7 @@ import { createMcpHandler, Server, type CallToolResult } from '@modelcontextprot
 import { z } from 'zod';
 import { toolDefinitionMap, toolZodShapes, type McpToolDefinition } from './tools.js';
 import { applyAuth } from './upstream-auth.js';
+import { PLAYGROUND_FILES, PLAYGROUND_HEADERS } from './playground.js';
 
 const SERVER_NAME = ${JSON.stringify(input.serverName)};
 const SERVER_VERSION = ${JSON.stringify(input.serverVersion)};
@@ -305,6 +327,8 @@ const MCP_ROUTE = '/mcp';
 export interface Env {
   /** Upstream API base URL (set in wrangler.jsonc vars or as a secret). */
   API_BASE_URL?: string;${envAuthFields}
+  /** Set to "off" to stop serving the browser playground at /. */
+  MCP_PLAYGROUND?: string;
   /** Secrets are injected at runtime via \`wrangler secret put\`. */
   [key: string]: string | undefined;
 }
@@ -340,16 +364,51 @@ function createServer(env: Env, forwardedHeaders: Record<string, string>): Serve
   return server;
 }
 ${inboundAuthDecl}
+/**
+ * CORS for browser clients, including the hosted playground. Any origin may call
+ * /mcp because access is controlled by the Authorization header, never by cookies.
+ */
+const CORS_HEADERS: Record<string, string> = {
+  'access-control-allow-origin': '*',
+  'access-control-expose-headers': 'mcp-session-id, mcp-protocol-version, www-authenticate',
+};
+const CORS_PREFLIGHT_HEADERS: Record<string, string> = {
+  ...CORS_HEADERS,
+  'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
+  'access-control-allow-headers': ${JSON.stringify(corsAllowHeaders.join(', '))},
+  'access-control-max-age': '86400',
+};
+
+function withCors(response: Response): Response {
+  const res = new Response(response.body, response);
+  for (const [name, value] of Object.entries(CORS_HEADERS)) res.headers.set(name, value);
+  return res;
+}
+
+async function handleMcp(request: Request, env: Env): Promise<Response> {${inboundAuthCheck}
+  // One handler per request serves both protocol eras: MCP 2026-07-28
+  // (server/discover, per-request metadata) and 2025-era clients statelessly.
+  const forwardedHeaders = ${forwardedExpr};
+  return createMcpHandler(() => createServer(env, forwardedHeaders)).fetch(request);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    // Browser playground at / (the same page as https://mcp.pidata.tech/playground).
+    if (request.method === 'GET' && (env.MCP_PLAYGROUND ?? '').toLowerCase() !== 'off') {
+      const asset = PLAYGROUND_FILES[url.pathname];
+      if (asset) {
+        return new Response(asset.body, { headers: { 'content-type': asset.type, ...PLAYGROUND_HEADERS } });
+      }
+    }
     if (url.pathname !== MCP_ROUTE) {
       return new Response('Not found', { status: 404 });
-    }${inboundAuthCheck}
-    // One handler per request serves both protocol eras: MCP 2026-07-28
-    // (server/discover, per-request metadata) and 2025-era clients statelessly.
-    const forwardedHeaders = ${forwardedExpr};
-    return createMcpHandler(() => createServer(env, forwardedHeaders)).fetch(request);
+    }
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_PREFLIGHT_HEADERS });
+    }
+    return withCors(await handleMcp(request, env));
   },
 } satisfies ExportedHandler<Env>;
 
@@ -946,6 +1005,16 @@ npm run dev                      # http://localhost:8787/mcp
 
 - Non-secret config (e.g. \`API_BASE_URL\`) lives in \`wrangler.jsonc\` under \`vars\`.
 - Secrets (API keys, tokens, passwords) are set with \`wrangler secret put\` and never committed.
+
+## Try it in the browser
+
+Open the Worker's root URL (\`http://localhost:8787/\` with \`npm run dev\`, or your \`workers.dev\` URL) to
+use the built-in playground: it lists the tools, builds a form for each one and shows every JSON-RPC
+message. The same page is hosted at [mcp.pidata.tech/playground](https://mcp.pidata.tech/playground) for
+any deployed server. Set the \`MCP_PLAYGROUND\` var to \`off\` in \`wrangler.jsonc\` to stop serving it.
+
+\`/mcp\` answers CORS requests from any origin, so browser-based clients can connect. Access is still
+controlled by the \`Authorization\` header, never by cookies.
 
 ## Connect a client
 
