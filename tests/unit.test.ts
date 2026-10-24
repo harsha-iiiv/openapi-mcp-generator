@@ -527,6 +527,7 @@ describe('cloudflare-worker target', () => {
         'README.md',
         'package.json',
         'src/index.ts',
+        'src/playground.ts',
         'src/tools.ts',
         'src/upstream-auth.ts',
         'tsconfig.json',

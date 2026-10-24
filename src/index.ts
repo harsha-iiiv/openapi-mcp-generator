@@ -22,11 +22,11 @@ import {
   generateEnvExample,
   generateOAuth2Docs,
   generateWebServerCode,
-  generateTestClientHtml,
   generateStreamableHttpCode,
-  generateStreamableHttpClientHtml,
   generateCustomAuthStub,
   generateCloudflareWorkerFiles,
+  readPlaygroundAssets,
+  generatePlaygroundConfig,
 } from './generator/index.js';
 
 // Import types
@@ -245,7 +245,6 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
   // Web server files (if requested)
   const webServerPath = path.join(srcDir, 'web-server.ts');
   const publicDir = path.join(outputDir, 'public');
-  const indexHtmlPath = path.join(publicDir, 'index.html');
 
   // StreamableHTTP files (if requested)
   const streamableHttpPath = path.join(srcDir, 'streamable-http.ts');
@@ -486,13 +485,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       await fs.writeFile(webServerPath, webServerCode);
       console.error(` -> Created ${webServerPath}`);
 
-      // Create public directory and index.html
-      await fs.mkdir(publicDir, { recursive: true });
-
-      // Generate test client
-      const indexHtmlContent = generateTestClientHtml(serverName);
-      await fs.writeFile(indexHtmlPath, indexHtmlContent);
-      console.error(` -> Created ${indexHtmlPath}`);
+      await writePlayground(publicDir, { transport: 'sse', endpoint: '/sse', inboundAuth });
     }
 
     // Generate streamable HTTP files if streamable-http transport is requested
@@ -508,13 +501,11 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       await fs.writeFile(streamableHttpPath, streamableHttpCode);
       console.error(` -> Created ${streamableHttpPath}`);
 
-      // Create public directory and index.html
-      await fs.mkdir(publicDir, { recursive: true });
-
-      // Generate test client
-      const indexHtmlContent = generateStreamableHttpClientHtml(serverName);
-      await fs.writeFile(indexHtmlPath, indexHtmlContent);
-      console.error(` -> Created ${indexHtmlPath}`);
+      await writePlayground(publicDir, {
+        transport: 'streamable-http',
+        endpoint: '/mcp',
+        inboundAuth,
+      });
     }
 
     console.error('\n---');
@@ -527,12 +518,12 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server in web mode: npm run start:web`);
       console.error(`   (This will start a web server on port ${options.port ?? 3000})`);
-      console.error(`   Access the test client at: http://localhost:${options.port ?? 3000}`);
+      console.error(`   Open the playground at: http://localhost:${options.port ?? 3000}`);
     } else if (options.transport === 'streamable-http') {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server in StreamableHTTP mode: npm run start:http`);
       console.error(`   (This will start a StreamableHTTP server on port ${options.port ?? 3000})`);
-      console.error(`   Access the test client at: http://localhost:${options.port ?? 3000}`);
+      console.error(`   Open the playground at: http://localhost:${options.port ?? 3000}`);
     } else {
       console.error(`3. Build the TypeScript code: npm run build`);
       console.error(`4. Run the server: npm start`);
@@ -568,4 +559,20 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
 }
 
 // Export the run function for programmatic usage
+/** Copies the browser playground into ./public with a config pointing at this server's endpoint. */
+async function writePlayground(
+  publicDir: string,
+  config: { transport: 'streamable-http' | 'sse'; endpoint: string; inboundAuth: InboundAuthMode }
+): Promise<void> {
+  await fs.mkdir(publicDir, { recursive: true });
+  for (const asset of readPlaygroundAssets()) {
+    await fs.writeFile(path.join(publicDir, asset.file), asset.content);
+  }
+  await fs.writeFile(
+    path.join(publicDir, 'playground.config.json'),
+    generatePlaygroundConfig(config)
+  );
+  console.error(` -> Created ${publicDir} (browser playground)`);
+}
+
 export { runGenerator as generateMcpServer };
