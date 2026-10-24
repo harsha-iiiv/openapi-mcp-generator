@@ -885,6 +885,7 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
     '# Local development secrets for `wrangler dev`. Copy to `.dev.vars`.',
     '#',
     '# In production set these with: wrangler secret put <NAME>',
+    '# Uncomment the secrets you use and set real values (a "..." placeholder left in place is sent as the credential).',
     '',
   ];
   const schemes = input.securitySchemes ?? {};
@@ -903,31 +904,31 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
           ? scheme.scheme?.toLowerCase()
           : undefined;
       if (scheme && 'type' in scheme && scheme.type === 'http' && httpScheme === 'basic') {
-        lines.push(`${upper}_USERNAME="..."`, `${upper}_PASSWORD="..."`);
+        lines.push(`# ${upper}_USERNAME="..."`, `# ${upper}_PASSWORD="..."`);
       } else if (scheme && 'type' in scheme && scheme.type === 'http') {
-        lines.push(`${upper}_TOKEN="..."`);
+        lines.push(`# ${upper}_TOKEN="..."`);
       } else if (scheme && 'type' in scheme && scheme.type === 'oauth2') {
         const clientCredentials = scheme.flows?.clientCredentials;
         if (clientCredentials) {
           lines.push(
             `# OAuth2 '${name}': a token you already have, or the client ID and secret to fetch one`,
-            `${upper}_TOKEN="..."`,
-            `${upper}_CLIENT_ID="..."`,
-            `${upper}_CLIENT_SECRET="..."`
+            `# ${upper}_TOKEN="..."`,
+            `# ${upper}_CLIENT_ID="..."`,
+            `# ${upper}_CLIENT_SECRET="..."`
           );
           if (!clientCredentials.tokenUrl) {
-            lines.push(`${upper}_TOKEN_URL="..."`);
+            lines.push(`# ${upper}_TOKEN_URL="..."`);
           }
         } else {
           lines.push(
-            `# OAuth2 '${name}': an access token you already obtained (this flow cannot be fetched by the Worker)`,
-            `${upper}_TOKEN="..."`
+            `# OAuth2 '${name}': an access token you already obtained (the Worker cannot fetch one for this flow)`,
+            `# ${upper}_TOKEN="..."`
           );
         }
       } else if (scheme && 'type' in scheme && scheme.type === 'openIdConnect') {
-        lines.push(`${upper}_TOKEN="..."`);
+        lines.push(`# ${upper}_TOKEN="..."`);
       } else {
-        lines.push(`${upper}_API_KEY="..."`);
+        lines.push(`# ${upper}_API_KEY="..."`);
       }
     }
   }
@@ -946,7 +947,7 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
       '# Inbound bearer token MCP clients must send to /mcp (Authorization: Bearer <token>).',
       '# Generate one with: openssl rand -hex 32',
       '# To rotate without downtime, set MCP_AUTH_TOKENS="new-token,old-token" instead.',
-      'MCP_AUTH_TOKEN="..."'
+      '# MCP_AUTH_TOKEN="..."'
     );
   }
   return lines.join('\n') + '\n';
@@ -1134,7 +1135,7 @@ ${secretLines}${inboundSecretLine}
 ## Local development
 
 \`\`\`bash
-cp .dev.vars.example .dev.vars   # fill in your secrets
+cp .dev.vars.example .dev.vars   # uncomment and fill in your secrets
 npm run dev                      # http://localhost:8787/mcp
 \`\`\`
 

@@ -306,7 +306,7 @@ Highlights:
 - `--inbound-auth bearer` protects `/mcp` with a token from `wrangler secret put MCP_AUTH_TOKEN`; `--header-passthrough` forwards per-user upstream keys from the client.
 - `--custom-auth`, `--port`, `--insecure`, `--generate-lib`, and `--oauth-creds-in-body` do not apply to this target and are ignored with a warning.
 
-Local development: `cp .dev.vars.example .dev.vars`, fill in secrets, then `npm run dev` (serves `http://localhost:8787/mcp`). Connect with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or, from Claude Desktop, via [mcp-remote](https://www.npmjs.com/package/mcp-remote).
+Local development: `cp .dev.vars.example .dev.vars`, uncomment and fill in the secrets you use, then `npm run dev` (serves `http://localhost:8787/mcp`). Connect with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or, from Claude Desktop, via [mcp-remote](https://www.npmjs.com/package/mcp-remote).
 
 ### Transport Comparison
 
