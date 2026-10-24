@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MCP_ALLOWED_ORIGINS` get `403`, which blocks DNS-rebinding attacks on local servers.
   Clients that send no `Origin` header (most MCP clients) are unaffected.
 - Unknown tools, invalid arguments and upstream failures return `isError: true`.
+- Generated Worker projects install cleanly again: `@cloudflare/workers-types` is pinned to v5,
+  matching current wrangler's peer range (a fresh `npm install` failed with ERESOLVE).
 
 ### Changed
 
