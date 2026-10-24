@@ -1,0 +1,23 @@
+{
+  // MCP relay for browser clients. Deploy with: npx wrangler deploy (from this directory).
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mcp-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  // Uncomment and set your own domain, e.g. relay.mcp.pidata.tech:
+  // "routes": [{ "pattern": "relay.mcp.pidata.tech", "custom_domain": true }],
+  "vars": {
+    // Comma-separated origins whose pages may use the relay.
+    "ALLOWED_ORIGINS": "https://mcp.pidata.tech",
+  },
+  "ratelimits": [
+    {
+      // 120 requests per minute per client IP, counted per Cloudflare location.
+      "name": "RATE_LIMITER",
+      "namespace_id": "4207",
+      "simple": { "limit": 120, "period": 60 },
+    },
+  ],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+}
