@@ -2,6 +2,7 @@ import { OpenAPIV3 } from 'openapi-types';
 import { CliOptions } from '../types/index.js';
 import { extractToolsFromApi } from '../parser/extract-tools.js';
 import { determineBaseUrl } from '../utils/index.js';
+import { getServerInstructions } from '../utils/helpers.js';
 import {
   generateToolDefinitionMap,
   generateCallToolHandler,
@@ -40,6 +41,15 @@ export function generateMcpServerCode(
 
   // Determine base URL
   const determinedBaseUrl = determineBaseUrl(api, options.baseUrl);
+
+  // Server instructions for clients, from the spec's info.description (bounded).
+  const instructions = getServerInstructions(api.info?.description);
+  const instructionsDecl =
+    instructions !== undefined
+      ? `\n// Instructions sent to clients, from the OpenAPI info.description.\nexport const SERVER_INSTRUCTIONS = ${JSON.stringify(instructions)};`
+      : '';
+  const instructionsOption =
+    instructions !== undefined ? ', instructions: SERVER_INSTRUCTIONS' : '';
 
   // Security/execution generation options derived from CLI options
   const securityOptions: SecurityCodeOptions = {
@@ -190,7 +200,7 @@ interface McpToolDefinition {
  * Server configuration
  */
 export const SERVER_NAME = "${serverName}";
-export const SERVER_VERSION = "${serverVersion}";
+export const SERVER_VERSION = "${serverVersion}";${instructionsDecl}
 // Base URL for the API, can be set via environment variable or determined from OpenAPI spec
 export const API_BASE_URL = process.env.API_BASE_URL || "${determinedBaseUrl || ''}";
 console.error("API_BASE_URL is set to:", API_BASE_URL);
@@ -216,7 +226,7 @@ ${generateSchemaValidationCode()}${generateServerUrlResolutionCode()}
 export function createServer(): Server {
   const server = new Server(
       { name: SERVER_NAME, version: SERVER_VERSION },
-      { capabilities: { tools: {} } }
+      { capabilities: { tools: {} }${instructionsOption} }
   );
 ${listToolsHandlerCode}
 ${callToolHandlerCode}

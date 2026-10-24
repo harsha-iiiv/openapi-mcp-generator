@@ -91,7 +91,11 @@ function startUpstream(): Promise<Upstream> {
 function featureSpec(upstream: string): OpenAPIV3.Document {
   return {
     openapi: '3.0.3',
-    info: { title: 'Feature Matrix', version: '1.0.0' },
+    info: {
+      title: 'Feature Matrix',
+      version: '1.0.0',
+      description: '  Manage the pets of a small shop.\n\nIDs are integers.  ',
+    },
     servers: [{ url: upstream }],
     paths: {
       '/pets/{petId}': {
@@ -165,6 +169,7 @@ interface AnyClient {
   label: string;
   callTool(name: string, args: Record<string, unknown>): Promise<CallResult>;
   listTools(): Promise<{ tools: any[] }>;
+  instructions(): string | undefined;
   close(): Promise<void>;
 }
 
@@ -173,6 +178,7 @@ function wrap(label: string, client: Client | ModernClient): AnyClient {
     label,
     callTool: (name, args) => client.callTool({ name, arguments: args }) as Promise<CallResult>,
     listTools: () => client.listTools() as Promise<{ tools: any[] }>,
+    instructions: () => client.getInstructions(),
     close: () => client.close(),
   };
 }
@@ -326,6 +332,14 @@ describe('input schema fidelity seen by clients', () => {
       expect(body.properties.id, client.label).toBeUndefined();
       expect(body.required, client.label).toEqual(['name']);
       expect(body.properties.name.examples, client.label).toEqual(['Rex']);
+    }
+  });
+
+  it('sends the trimmed info.description as server instructions', async () => {
+    for (const client of clients) {
+      expect(client.instructions(), client.label).toBe(
+        'Manage the pets of a small shop.\n\nIDs are integers.'
+      );
     }
   });
 
@@ -550,6 +564,10 @@ describe('per-operation and per-path servers (#73)', () => {
 
   afterAll(async () => {
     for (const client of clients) await client.close();
+  });
+
+  it('omits instructions when the spec has no description', () => {
+    for (const client of clients) expect(client.instructions(), client.label).toBeUndefined();
   });
 
   it('routes each operation to its operation, path-item or base server', async () => {

@@ -35,6 +35,8 @@ export interface CloudflareWorkerGenInput {
   inboundAuth?: InboundAuthMode;
   /** Inbound header names forwarded to the upstream API per request (issue #55). */
   headerPassthrough?: string[];
+  /** Server instructions for clients (bounded info.description); omitted when empty. */
+  instructions?: string;
 }
 
 /** Lower-cased, de-duplicated passthrough header names. */
@@ -290,7 +292,7 @@ import { applyAuth, describeMissingCredentials, requiresCredentials } from './up
 import { PLAYGROUND_FILES, PLAYGROUND_HEADERS } from './playground.js';
 
 const SERVER_NAME = ${JSON.stringify(input.serverName)};
-const SERVER_VERSION = ${JSON.stringify(input.serverVersion)};
+const SERVER_VERSION = ${JSON.stringify(input.serverVersion)};${input.instructions ? `\n/** Instructions sent to clients, from the OpenAPI info.description. */\nconst SERVER_INSTRUCTIONS = ${JSON.stringify(input.instructions)};` : ''}
 const MCP_ROUTE = '/mcp';
 
 export interface Env {
@@ -310,7 +312,7 @@ ${passthroughDecl}
 function createServer(env: Env, forwardedHeaders: Record<string, string>): Server {
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {} }${input.instructions ? ', instructions: SERVER_INSTRUCTIONS' : ''} }
   );
   server.setRequestHandler('tools/list', async () => ({
     tools: Array.from(toolDefinitionMap.values()).map((def) => ({

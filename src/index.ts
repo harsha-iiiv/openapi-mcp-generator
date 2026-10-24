@@ -29,7 +29,7 @@ import {
 
 // Import types
 import { CliOptions, InboundAuthMode, TransportType } from './types/index.js';
-import { normalizeBoolean } from './utils/helpers.js';
+import { getServerInstructions, normalizeBoolean } from './utils/helpers.js';
 import { parseSpecSecurely } from './utils/parser-security.js';
 import { extractToolsFromApi } from './parser/extract-tools.js';
 import { determineBaseUrl } from './utils/url.js';
@@ -356,6 +356,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         baseUrl: resolvedBaseUrl,
         inboundAuth,
         headerPassthrough: options.headerPassthrough,
+        instructions: getServerInstructions(api.info?.description),
       });
 
       // Each file's parent directory is created per-iteration below, so no

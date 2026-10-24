@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { OpenAPIV3 } from 'openapi-types';
 
-import { sanitizeForTemplate } from '../src/utils/helpers.js';
+import { getServerInstructions, sanitizeForTemplate } from '../src/utils/helpers.js';
 import {
   assertNoExternalRefs,
   isExternalHttpRef,
@@ -296,6 +296,42 @@ describe('#73 operation and path-item servers', () => {
     expect(byName.rootLevel.serverUrl).toBeUndefined();
     expect((byName.rootLevel as any).baseUrl).toBe('https://prod.example.com/api');
     expect(generateToolDefinitionMap(tools)).toContain('serverUrl: "/v2",');
+  });
+});
+
+// --- server instructions ------------------------------------------------------------
+
+describe('server instructions from info.description', () => {
+  it('trims, omits blanks and bounds the length to 2000 characters', () => {
+    expect(getServerInstructions('  Pets API  ')).toBe('Pets API');
+    expect(getServerInstructions('   ')).toBeUndefined();
+    expect(getServerInstructions(undefined)).toBeUndefined();
+    const long = getServerInstructions('x'.repeat(5000))!;
+    expect(long.length).toBe(2000);
+    expect(long.endsWith('…')).toBe(true);
+    expect(getServerInstructions('y'.repeat(2000))).toBe('y'.repeat(2000));
+  });
+
+  it('is emitted only when present', () => {
+    const base = {
+      openapi: '3.0.3',
+      paths: {},
+    } as unknown as OpenAPIV3.Document;
+    const withText = generateMcpServerCode(
+      { ...base, info: { title: 't', version: '1', description: 'Use `me` ${wisely}' } },
+      { input: 'x', output: 'y' },
+      't',
+      '1'
+    );
+    expect(withText).toContain('export const SERVER_INSTRUCTIONS = "Use `me` ${wisely}";');
+    expect(withText).toContain('instructions: SERVER_INSTRUCTIONS');
+    const without = generateMcpServerCode(
+      { ...base, info: { title: 't', version: '1' } },
+      { input: 'x', output: 'y' },
+      't',
+      '1'
+    );
+    expect(without).not.toContain('SERVER_INSTRUCTIONS');
   });
 });
 
