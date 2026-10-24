@@ -247,6 +247,10 @@ headers are forwarded per request, so the server stores no shared secret. Passth
 forward `Authorization` while `--inbound-auth bearer` is on, because that header carries the MCP
 token.
 
+**Browser origins.** Node HTTP servers reject browser requests whose `Origin` is not loopback
+or listed in `MCP_ALLOWED_ORIGINS` (comma-separated), which blocks DNS-rebinding attacks on
+servers running on your machine. MCP clients that send no `Origin` header are unaffected.
+
 `--inbound-auth` has no effect on `stdio`: a stdio server has no network endpoint, and only the
 process that launches it can talk to it.
 

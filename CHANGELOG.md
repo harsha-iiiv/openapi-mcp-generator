@@ -43,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The generated Worker `src/index.ts` type-checks with current SDK typings (TS2589 on
   `server.tool`).
 - Generated Node projects depend on `@modelcontextprotocol/sdk` `^1.26.0`.
+- `web` and `streamable-http` validate the `Origin` header, as the MCP Streamable HTTP
+  binding requires: browser requests from origins that are not loopback or listed in
+  `MCP_ALLOWED_ORIGINS` get `403`, which blocks DNS-rebinding attacks on local servers.
+  Clients that send no `Origin` header (most MCP clients) are unaffected.
+- Unknown tools, invalid arguments and upstream failures return `isError: true`.
 
 ### Changed
 

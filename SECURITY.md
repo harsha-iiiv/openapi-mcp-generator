@@ -50,6 +50,8 @@ Out of scope:
   `MCP_AUTH_TOKEN` (or comma-separated `MCP_AUTH_TOKENS` for rotation) and compared in constant
   time on SHA-256 digests. The endpoint fails closed (`503`) when no token is configured, and
   Streamable HTTP and SSE sessions are bound to the token that opened them.
+- **Browser origins** are validated on Node HTTP servers: requests whose `Origin` is not
+  loopback or listed in `MCP_ALLOWED_ORIGINS` are refused, which blocks DNS rebinding.
 - **Upstream security requirements** follow OpenAPI semantics: alternatives are tried in order,
   every scheme of an alternative must be satisfied, and an incomplete set of credentials is
   never sent.
