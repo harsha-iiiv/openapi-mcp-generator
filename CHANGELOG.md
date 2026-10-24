@@ -45,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    clients that start with `initialize` keep working.
 7. Not ready to move? Pin the previous major: `npx openapi-mcp-generator@4 ...`.
 
+## [4.2.0] - 2026-10-23
+
 ### Added
 
 - `--inbound-auth bearer` (#80): HTTP transports (`web`, `streamable-http`,
