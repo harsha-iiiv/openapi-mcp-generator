@@ -975,7 +975,8 @@ describe('generated package.json', () => {
     JSON.parse(generatePackageJson('demo', '1.0.0', transport));
 
   it('requires Node 22 for the generator and every generated Node project', () => {
-    expect(rootPackageJson.engines.node).toBe('>=22');
+    // The generator itself needs 22.19+ (@apidevtools/swagger-parser 13 and commander 15).
+    expect(rootPackageJson.engines.node).toBe('>=22.19.0');
     for (const transport of ['stdio', 'web', 'streamable-http']) {
       const pkg = manifest(transport);
       expect(pkg.engines.node).toBe('>=22');

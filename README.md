@@ -352,7 +352,7 @@ browser tab.
 
 ## ⚠️ Requirements
 
-- Node.js 22 or later (the generator and the generated projects both require it; Node 20 reached end of life in April 2026)
+- Node.js 22.19 or later to run the generator; generated projects require Node.js 22 or later (Node 20 reached end of life in April 2026)
 
 ---
 
