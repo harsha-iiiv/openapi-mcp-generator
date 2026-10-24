@@ -76,6 +76,19 @@ function serializationSpec(upstream: string): OpenAPIV3.Document {
       },
     },
     paths: {
+      '/object-cookie': {
+        get: {
+          operationId: 'objectCookie',
+          parameters: [
+            {
+              name: 'prefs_obj',
+              in: 'cookie',
+              schema: { type: 'object', additionalProperties: { type: 'string' } },
+            },
+          ],
+          responses: { '200': { description: 'ok' } },
+        },
+      },
       '/items': {
         get: {
           operationId: 'listItems',
@@ -320,6 +333,15 @@ describe('cookie parameters', () => {
       const seen = await lastRequest(call, label, 'secureItems', { session_id: 'sess-123' });
       const pairs = (seen.cookie ?? '').split('; ').sort();
       expect(pairs, label).toEqual(['api_token=key-123', 'session_id=sess-123']);
+    }
+  });
+
+  it('percent-encodes cookie names from an exploded object, so keys cannot add pairs', async () => {
+    for (const { label, call } of targets) {
+      const seen = await lastRequest(call, label, 'objectCookie', {
+        prefs_obj: { theme: 'dark', 'a;b=c': 'x' },
+      });
+      expect(seen.cookie, label).toBe('theme=dark; a%3Bb%3Dc=x');
     }
   });
 

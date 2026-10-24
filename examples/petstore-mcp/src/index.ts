@@ -1026,7 +1026,9 @@ async function executeApiTool(
 
     // Cookie parameters share one Cookie header; an apiKey cookie credential is added to it later
     if (cookiePairs.length > 0) {
-        headers['cookie'] = cookiePairs.map(([name, value]) => name + '=' + encodeURIComponent(value)).join('; ');
+        headers['cookie'] = cookiePairs
+            .map(([name, value]) => encodeURIComponent(name) + '=' + encodeURIComponent(value))
+            .join('; ');
     }
 
     // Ensure all path parameters are resolved
