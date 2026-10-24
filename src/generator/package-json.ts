@@ -33,10 +33,10 @@ export function generatePackageJson(
     dependencies: {
       // MCP TypeScript SDK v2: serves MCP 2026-07-28 and 2025-era clients.
       '@modelcontextprotocol/server': '^2.4.0',
+      // JSON Schema 2020-12 validation of tool arguments (no code generation or eval).
+      '@cfworker/json-schema': '^4.1.1',
       axios: '^1.9.0',
       dotenv: '^16.4.5',
-      zod: '^3.24.3',
-      'json-schema-to-zod': '^2.6.1',
     },
     devDependencies: {
       '@types/node': '^22.17.2',

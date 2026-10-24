@@ -1,7 +1,7 @@
 /**
  * Integration smoke test: generate a server from a fixture spec and TypeScript
  * type-check the generated `src/index.ts` to catch build-breaking regressions
- * (e.g. issue #65). Uses the root project's installed peer deps for resolution.
+ * (e.g. issue #65). Uses the root project's installed dependencies for resolution.
  *
  * Run with: npm test
  */
@@ -19,7 +19,7 @@ const cliEntry = path.join(repoRoot, 'bin', 'openapi-mcp-generator.js');
 /**
  * Type-check generated TS against the repo's node_modules. The generated
  * project lives under the repo root so Node's upward module resolution finds
- * the installed peer deps (@modelcontextprotocol/sdk, zod, axios, ...).
+ * the installed deps (@modelcontextprotocol/server, @cfworker/json-schema, axios, ...).
  */
 function typecheckGenerated(srcDir: string): { ok: boolean; output: string } {
   const tmpTsconfig = path.join(srcDir, '..', 'tsconfig.check.json');
@@ -131,6 +131,29 @@ describe('integration: generate + typecheck', () => {
     expect(webTs).not.toContain('__mcpInboundHeaders');
     const indexTs = fs.readFileSync(path.join(out, 'src', 'index.ts'), 'utf8');
     expect(indexTs).toContain('export const inboundHeaderStore');
+  });
+
+  it('emits no eval or Function constructor in any generated file, for every target', () => {
+    const walk = (dir: string): string[] =>
+      fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = path.join(dir, entry.name);
+        return entry.isDirectory() ? walk(full) : [full];
+      });
+    for (const transport of ['stdio', 'web', 'streamable-http', 'cloudflare-worker']) {
+      const out = path.join(workdir, `no-eval-${transport}`);
+      generate(out, ['--transport', transport]);
+      const files = walk(out);
+      expect(files.length).toBeGreaterThan(3);
+      for (const file of files) {
+        const content = fs.readFileSync(file, 'utf8');
+        expect(content, file).not.toMatch(/\beval\s*\(/);
+        expect(content, file).not.toMatch(/\bnew\s+Function\s*\(/);
+        expect(content, file).not.toContain('json-schema-to-zod');
+      }
+      const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
+      expect(pkg.dependencies, transport).toHaveProperty('@cfworker/json-schema');
+      expect(pkg.dependencies, transport).not.toHaveProperty('zod');
+    }
   });
 
   it('rejects external $ref by default (SSRF guard)', () => {
@@ -317,7 +340,7 @@ describe('integration: generate + typecheck', () => {
     // src/tools.ts exposes the shared tool maps.
     const toolsTs = fs.readFileSync(path.join(out, 'src', 'tools.ts'), 'utf8');
     expect(toolsTs).toContain('export const toolDefinitionMap');
-    expect(toolsTs).toContain('export const toolZodShapes');
+    expect(toolsTs).not.toContain('zod');
 
     // wrangler.jsonc is configured for the Worker entrypoint + Node compat.
     const wrangler = fs.readFileSync(path.join(out, 'wrangler.jsonc'), 'utf8');

@@ -648,20 +648,12 @@ async function executeApiTool(
     allSecuritySchemes: Record<string, any>
 ): Promise<CallToolResult> {
   try {
-    // Validate arguments against the input schema
-    let validatedArgs: JsonObject;
-    try {
-        const zodSchema = getZodSchemaFromJsonSchema(definition.inputSchema, toolName);
-        const argsToParse = (typeof toolArgs === 'object' && toolArgs !== null) ? toolArgs : {};
-        validatedArgs = zodSchema.parse(argsToParse);
-    } catch (error: unknown) {
-        if (error instanceof ZodError) {
-            const validationErrorMessage = \`Invalid arguments for tool '\${toolName}': \${error.errors.map(e => \`\${e.path.join('.')} (\${e.code}): \${e.message}\`).join(', ')}\`;
-            return { isError: true, content: [{ type: 'text', text: validationErrorMessage }] };
-        } else {
-             const errorMessage = error instanceof Error ? error.message : String(error);
-             return { isError: true, content: [{ type: 'text', text: \`Internal error during validation setup: \${errorMessage}\` }] };
-        }
+    // Validate arguments against the tool's JSON Schema (no code generation, no eval).
+    // Invalid arguments are a tool execution error the model can read and correct.
+    const validatedArgs: JsonObject = (typeof toolArgs === 'object' && toolArgs !== null) ? toolArgs : {};
+    const validationError = validateToolArguments(toolName, definition.inputSchema, validatedArgs);
+    if (validationError) {
+        return { isError: true, content: [{ type: 'text', text: validationError }] };
     }
 
     // Prepare URL, query parameters, headers, and request body

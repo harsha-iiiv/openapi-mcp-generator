@@ -799,7 +799,7 @@ describe('cloudflare-worker target', () => {
     expect(index).not.toContain('x-api-key');
   });
 
-  it('emits src/tools.ts with embedded names + build-time zod and no eval', async () => {
+  it('emits src/tools.ts with embedded names, no zod and no eval', async () => {
     const tools = await getToolsFromOpenApi(petstorePath, { dereference: true });
     expect(tools.length).toBeGreaterThan(0);
     const files = generateCloudflareWorkerFiles({
@@ -813,9 +813,16 @@ describe('cloudflare-worker target', () => {
 
     expect(toolsFile).toContain(JSON.stringify(tools[0].name));
     expect(toolsFile).toContain('export const toolDefinitionMap');
-    expect(toolsFile).toContain('export const toolZodShapes');
-    expect(toolsFile).toContain("import { z } from 'zod'");
+    expect(toolsFile).not.toContain('zod');
     expect(toolsFile).not.toMatch(/\beval\s*\(/);
+    // Arguments are validated against the JSON Schema at runtime instead.
+    const index = fileContent(files, 'src/index.ts');
+    expect(index).toContain("import { Validator, type OutputUnit } from '@cfworker/json-schema'");
+    expect(index).toContain('validateToolArguments(def.name, def.inputSchema, args)');
+    expect(index).not.toContain('zod');
+    const pkg = JSON.parse(fileContent(files, 'package.json'));
+    expect(pkg.dependencies).toHaveProperty('@cfworker/json-schema');
+    expect(pkg.dependencies).not.toHaveProperty('zod');
   });
 
   it('keeps secrets out of wrangler.jsonc and lists the api-key var in .dev.vars.example', async () => {
@@ -981,6 +988,15 @@ describe('generated package.json', () => {
       const pkg = manifest(transport);
       expect(pkg.engines.node).toBe('>=22');
       expect(pkg.devDependencies['@types/node']).toMatch(/^\^22\./);
+    }
+  });
+
+  it('validates with @cfworker/json-schema instead of zod and json-schema-to-zod', () => {
+    for (const transport of ['stdio', 'web', 'streamable-http']) {
+      const deps = manifest(transport).dependencies;
+      expect(deps).toHaveProperty('@cfworker/json-schema');
+      expect(deps).not.toHaveProperty('zod');
+      expect(deps).not.toHaveProperty('json-schema-to-zod');
     }
   });
 });

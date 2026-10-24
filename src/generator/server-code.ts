@@ -6,6 +6,7 @@ import {
   generateToolDefinitionMap,
   generateCallToolHandler,
   generateListToolsHandler,
+  generateSchemaValidationCode,
 } from '../utils/code-gen.js';
 import {
   generateExecuteApiToolFunction,
@@ -154,8 +155,7 @@ dotenv.config();
 
 import { Server, type Tool, type CallToolResult, type CallToolRequest } from "@modelcontextprotocol/server";${stdioImport}${transportImport}
 
-import { z, ZodError } from 'zod';
-import { jsonSchemaToZod } from 'json-schema-to-zod';
+import { Validator, type OutputUnit } from '@cfworker/json-schema';
 import axios, { type AxiosRequestConfig, type AxiosError } from 'axios';
 ${securityModuleImports}${inboundHeaderStoreDecl}
 /**
@@ -199,7 +199,7 @@ ${toolDefinitionMapCode}
  * Security schemes from the OpenAPI spec
  */
 const securitySchemes = ${JSON.stringify(api.components?.securitySchemes || {}, null, 2).replace(/^/gm, '  ')};
-
+${generateSchemaValidationCode()}
 /**
  * Creates a fresh MCP server instance with the tool handlers registered.
  * Transports call this once per request, connection or era probe: an SDK server
@@ -258,30 +258,6 @@ function formatApiError(error: AxiosError): string {
         message += \`API Request Setup Error: \${error.message}\`; 
     }
     return message;
-}
-
-/**
- * Converts a JSON Schema to a Zod schema for runtime validation
- * 
- * @param jsonSchema JSON Schema
- * @param toolName Tool name for error reporting
- * @returns Zod schema
- */
-function getZodSchemaFromJsonSchema(jsonSchema: any, toolName: string): z.ZodTypeAny {
-    if (typeof jsonSchema !== 'object' || jsonSchema === null) { 
-        return z.object({}).passthrough(); 
-    }
-    try {
-        const zodSchemaString = jsonSchemaToZod(jsonSchema);
-        const zodSchema = eval(zodSchemaString);
-        if (typeof zodSchema?.parse !== 'function') { 
-            throw new Error('Eval did not produce a valid Zod schema.'); 
-        }
-        return zodSchema as z.ZodTypeAny;
-    } catch (err: any) {
-        console.error(\`Failed to generate/evaluate Zod schema for '\${toolName}':\`, err);
-        return z.object({}).passthrough();
-    }
 }
 `;
 }

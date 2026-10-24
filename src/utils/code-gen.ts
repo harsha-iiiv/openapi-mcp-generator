@@ -121,6 +121,80 @@ server.setRequestHandler('tools/call', async (request: CallToolRequest): Promise
 }
 
 /**
+ * Generates the JSON Schema validation helpers shared by the Node and Worker
+ * targets. Validation uses @cfworker/json-schema (JSON Schema 2020-12), which
+ * interprets schemas directly: no code generation, no eval, safe on Workers.
+ * The generated module must import `Validator` and `OutputUnit` from
+ * '@cfworker/json-schema'.
+ *
+ * @returns Generated TypeScript source
+ */
+export function generateSchemaValidationCode(): string {
+  return `
+/** Compiled JSON Schema validators, created on first use and cached by key. */
+const schemaValidators = new Map<string, Validator>();
+
+/**
+ * Returns the cached validator for a schema (JSON Schema 2020-12, all errors).
+ * The validator gets its own copy because compiling annotates the schema object.
+ */
+function getSchemaValidator(key: string, schema: unknown): Validator {
+    let validator = schemaValidators.get(key);
+    if (!validator) {
+        const compiled = typeof schema === 'boolean' ? schema : structuredClone(schema ?? {});
+        validator = new Validator(compiled as any, '2020-12', false);
+        schemaValidators.set(key, validator);
+    }
+    return validator;
+}
+
+/** Keywords whose errors only repeat that a nested value failed. */
+const SUMMARY_KEYWORDS = new Set([
+    'properties', 'patternProperties', 'additionalProperties', 'unevaluatedProperties',
+    'items', 'prefixItems', 'additionalItems', 'unevaluatedItems', 'contains',
+    'dependentSchemas', 'propertyNames', '$ref', '$recursiveRef', '$dynamicRef',
+]);
+
+/**
+ * Formats validation errors as "<location>: <message>" joined with "; ",
+ * dropping summaries that only repeat a more specific error.
+ */
+function formatSchemaErrors(errors: OutputUnit[]): string {
+    const location = (pointer: string) => (pointer === '#' || pointer === '' ? '(root)' : pointer.replace(/^#/, ''));
+    const isUnder = (pointer: string, parent: string) => pointer === parent || pointer.startsWith(parent + '/');
+    const specific = errors.filter((e) => !SUMMARY_KEYWORDS.has(e.keyword) && e.keyword !== 'false');
+    const kept = errors.filter((e) => {
+        if (SUMMARY_KEYWORDS.has(e.keyword)) {
+            return !specific.some((other) => isUnder(other.instanceLocation, e.instanceLocation));
+        }
+        if (e.keyword === 'false') {
+            // "false" schemas reject any value, e.g. a property additionalProperties forbids.
+            return !specific.some((other) => other.instanceLocation === e.instanceLocation);
+        }
+        return true;
+    });
+    const messages: string[] = [];
+    for (const e of kept.length > 0 ? kept : errors) {
+        const text = e.keyword === 'false' ? 'Not allowed by the schema.' : e.error;
+        const message = \`\${location(e.instanceLocation)}: \${text}\`;
+        if (!messages.includes(message)) messages.push(message);
+    }
+    return messages.join('; ');
+}
+
+/**
+ * Validates tool arguments against the tool's input schema. Returns a readable
+ * error message, or null when they are valid. Arguments are never modified:
+ * schema defaults are not injected.
+ */
+function validateToolArguments(toolName: string, inputSchema: unknown, args: unknown): string | null {
+    const result = getSchemaValidator(\`input:\${toolName}\`, inputSchema).validate(args);
+    return result.valid ? null : \`Invalid arguments for tool '\${toolName}': \${formatSchemaErrors(result.errors)}\`;
+}
+`;
+}
+
+/**
  * Convert a string to title case
  *
  * @param str String to convert
