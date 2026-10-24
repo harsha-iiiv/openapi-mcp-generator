@@ -1,0 +1,17 @@
+{
+  "name": "mcp-relay",
+  "private": true,
+  "version": "1.0.0",
+  "description": "CORS relay that lets browser pages reach MCP servers (Cloudflare Worker)",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "node dev-server.mjs",
+    "dev:wrangler": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "wrangler": "^4.36.0"
+  }
+}
