@@ -8,7 +8,11 @@ import { OpenAPIV3 } from 'openapi-types';
 import { extractToolsFromApi } from './parser/extract-tools.js';
 import { McpToolDefinition } from './types/index.js';
 import { determineBaseUrl } from './utils/url.js';
-import { assertNoExternalRefs, parseSpecSecurely } from './utils/parser-security.js';
+import {
+  assertNoExternalRefs,
+  assertNotSwagger2,
+  parseSpecSecurely,
+} from './utils/parser-security.js';
 
 /**
  * Options for generating the MCP tools
@@ -68,6 +72,7 @@ export async function getToolsFromOpenApi(
     } else if (isOpenApiDocument(specPathOrUrl)) {
       // Pre-parsed document, no dereference requested: use as-is.
       api = specPathOrUrl;
+      assertNotSwagger2(api);
       if (!allowExternalRefs) assertNoExternalRefs(api);
     } else {
       // Parse-only (no dereference): fetch/read the entry document (http allowed
@@ -75,6 +80,7 @@ export async function getToolsFromOpenApi(
       api = (await SwaggerParser.parse(
         specPathOrUrl as Parameters<typeof SwaggerParser.parse>[0]
       )) as OpenAPIV3.Document;
+      assertNotSwagger2(api);
       if (!allowExternalRefs) assertNoExternalRefs(api);
     }
 

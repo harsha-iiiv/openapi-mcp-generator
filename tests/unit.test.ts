@@ -12,6 +12,7 @@ import {
   isExternalHttpRef,
   ExternalRefError,
   parseSpecSecurely,
+  UnsupportedSwaggerError,
 } from '../src/utils/parser-security.js';
 import {
   extractToolsFromApi,
@@ -154,6 +155,58 @@ describe('#68 external $ref SSRF guard', () => {
     expect(body?.$ref).toBeUndefined();
     expect(body?.properties?.name).toBeDefined();
     expect(body?.properties?.id).toBeDefined();
+  });
+});
+
+// --- Swagger 2.0 input ----------------------------------------------------------
+
+describe('Swagger 2.0 input fails loudly', () => {
+  const swagger = {
+    swagger: '2.0',
+    info: { title: 'legacy', version: '1' },
+    host: 'api.example.com',
+    paths: {
+      '/x': {
+        post: {
+          operationId: 'postX',
+          parameters: [{ in: 'body', name: 'body', schema: { type: 'object' } }],
+          responses: { '200': { description: 'ok' } },
+        },
+      },
+    },
+  };
+  const message =
+    'Swagger 2.0 is not supported. Convert it to OpenAPI 3 first, for example: ' +
+    'npx swagger2openapi swagger.json -o openapi.json';
+
+  it('parseSpecSecurely rejects it with and without external refs allowed', async () => {
+    for (const allow of [false, true]) {
+      await expect(
+        parseSpecSecurely(structuredClone(swagger) as never, allow)
+      ).rejects.toBeInstanceOf(UnsupportedSwaggerError);
+      await expect(parseSpecSecurely(structuredClone(swagger) as never, allow)).rejects.toThrow(
+        message
+      );
+    }
+  });
+
+  it('getToolsFromOpenApi rejects it whether or not it dereferences', async () => {
+    for (const dereference of [false, true]) {
+      await expect(
+        getToolsFromOpenApi(structuredClone(swagger) as never, { dereference })
+      ).rejects.toThrow(message);
+    }
+  });
+
+  it('still accepts OpenAPI 3 documents', async () => {
+    const tools = await getToolsFromOpenApi({
+      openapi: '3.0.3',
+      info: { title: 'ok', version: '1' },
+      paths: {
+        '/x': { get: { operationId: 'getX', responses: { '200': { description: 'ok' } } } },
+      },
+    } as OpenAPIV3.Document);
+    expect(tools.map((t) => t.name)).toEqual(['getX']);
   });
 });
 

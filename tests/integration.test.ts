@@ -168,6 +168,37 @@ describe('integration: generate + typecheck', () => {
     expect(output).toMatch(/external \$ref|SSRF|allow-external-refs/i);
   });
 
+  it('refuses a Swagger 2.0 spec with a conversion hint and writes nothing', () => {
+    const swaggerSpec = path.join(workdir, 'swagger.json');
+    fs.writeFileSync(
+      swaggerSpec,
+      JSON.stringify({
+        swagger: '2.0',
+        info: { title: 'legacy', version: '1' },
+        paths: {
+          '/x': { get: { operationId: 'getX', responses: { '200': { description: 'ok' } } } },
+        },
+      })
+    );
+    const out = path.join(workdir, 'swagger-out');
+    let output = '';
+    let failed = false;
+    try {
+      execFileSync('node', [cliEntry, '--input', swaggerSpec, '--output', out, '--force'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
+    } catch (e: any) {
+      failed = true;
+      output = `${e.stdout ?? ''}${e.stderr ?? ''}`;
+    }
+    expect(failed).toBe(true);
+    expect(output).toContain('Swagger 2.0 is not supported. Convert it to OpenAPI 3 first');
+    expect(output).toContain('npx swagger2openapi swagger.json -o openapi.json');
+    expect(fs.existsSync(out)).toBe(false);
+  });
+
   it('allows external $ref when --allow-external-refs is set (guard does not block)', () => {
     // A spec whose only "external" ref is a local-style ref must generate fine
     // with the flag on; this exercises the allow path without a network call.
