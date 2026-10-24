@@ -2,16 +2,30 @@
  * Generator for .env file and .env.example file
  */
 import { OpenAPIV3 } from 'openapi-types';
+import { InboundAuthMode } from '../types/index.js';
 import { getEnvVarName } from '../utils/security.js';
+import { generateAllowedOriginsEnvDoc, generateInboundAuthEnvDoc } from './inbound-auth.js';
+
+/** Options affecting the generated .env.example. */
+export interface EnvExampleOptions {
+  /** Document the inbound MCP token when HTTP inbound auth is enabled (issue #80). */
+  inboundAuth?: InboundAuthMode;
+  /** Document MCP_ALLOWED_ORIGINS (Node HTTP transports). */
+  httpTransport?: boolean;
+  /** Document MCP_SESSION_IDLE_TIMEOUT (streamable-http sessions). */
+  streamableHttp?: boolean;
+}
 
 /**
  * Generates the content of .env.example file for the MCP server
  *
  * @param securitySchemes Security schemes from the OpenAPI spec
+ * @param options Generation options (inbound auth documentation)
  * @returns Content for .env.example file
  */
 export function generateEnvExample(
-  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes']
+  securitySchemes?: OpenAPIV3.ComponentsObject['securitySchemes'],
+  options: EnvExampleOptions = {}
 ): string {
   let content = `# MCP Server Environment Variables
 # Copy this file to .env and fill in the values
@@ -56,11 +70,24 @@ API_BASE_URL=your_api_base_url_here
         content += `# OAuth2 authentication (${scheme.flows ? Object.keys(scheme.flows).join(', ') : 'unknown'} flow)\n`;
         const varName = `OAUTH_TOKEN_${name.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}`;
         content += `${varName}=your_oauth_token_here\n`;
+      } else if (scheme.type === 'openIdConnect') {
+        content += `${getEnvVarName(name, 'OPENID_TOKEN')}=your_openid_token_here\n`;
       }
     }
   } else {
     content += `# No API authentication required\n`;
   }
+
+  if (options.httpTransport) content += generateAllowedOriginsEnvDoc();
+  if (options.streamableHttp) {
+    content += `
+# Seconds a Streamable HTTP session may stay idle before the server closes it
+# (default 1800; 0 disables). An open stream keeps a session in use. Clients that
+# come back start a new session.
+MCP_SESSION_IDLE_TIMEOUT=
+`;
+  }
+  content += generateInboundAuthEnvDoc(options.inboundAuth);
 
   content += `\n# Add any other environment variables your API might need\n`;
 

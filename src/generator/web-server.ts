@@ -1,16 +1,26 @@
 /**
  * Generator for web server code for the MCP server using Hono with SSE streaming
  */
+import { InboundAuthMode } from '../types/index.js';
+import {
+  generateNodeInboundAuthImports,
+  generateNodeInboundAuthMiddleware,
+  generateNodeInboundAuthMounts,
+  generateNodeOriginGuard,
+} from './inbound-auth.js';
 
 /**
  * Generates web server code for the MCP server (using Hono and SSE)
  *
  * @param port Server port (default: 3000)
+ * @param enableHeaderPassthrough Forward configured inbound headers upstream (issue #55)
+ * @param inboundAuth Require a bearer token on /sse and /api/messages (issue #80)
  * @returns Generated code for the web server
  */
 export function generateWebServerCode(
   port: number = 3000,
-  enableHeaderPassthrough: boolean = false
+  enableHeaderPassthrough: boolean = false,
+  inboundAuth: InboundAuthMode = 'none'
 ): string {
   const headerStoreImport = enableHeaderPassthrough
     ? `\nimport { inboundHeaderStore } from './index.js';`
@@ -24,15 +34,15 @@ import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { streamSSE } from 'hono/streaming';
 import { v4 as uuid } from 'uuid';
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { JSONRPCMessage, JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Context } from 'hono';
 import type { SSEStreamingApi } from 'hono/streaming';
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 // Import server configuration constants
-import { SERVER_NAME, SERVER_VERSION } from './index.js';${headerStoreImport}
-
+import { SERVER_NAME, SERVER_VERSION } from './index.js';${headerStoreImport}${generateNodeInboundAuthImports(inboundAuth)}
+${generateNodeOriginGuard()}${generateNodeInboundAuthMiddleware(inboundAuth)}
 /**
 * Custom SSE Transport implementation using Hono's streaming API
 */
@@ -157,19 +167,20 @@ async send(message: JSONRPCMessage): Promise<void> {
 /**
 * Sets up a web server for the MCP server using Server-Sent Events (SSE)
 * 
-* @param server The MCP Server instance
+* @param createServer Factory returning a fresh MCP server for each SSE connection
 * @param port The port to listen on (default: ${port})
 * @returns The Hono app instance
 */
-export async function setupWebServer(server: Server, port = ${port}) {
+export async function setupWebServer(createServer: () => Server, port = ${port}) {
 // Create Hono app
-const app = new Hono();
+const app = new Hono<{ Variables: { inboundPrincipal?: string } }>();
 
 // Enable CORS
 app.use('*', cors());
-
-// Store active SSE transports by session ID
+${generateNodeInboundAuthMounts(inboundAuth, ['/sse', '/api/messages'])}
+// Store active SSE transports by session ID, with the credential digest that opened each
 const transports: {[sessionId: string]: SSETransport} = {};
+const principals: {[sessionId: string]: string | undefined} = {};
 
 // Add a simple health check endpoint
 app.get('/health', (c) => {
@@ -185,13 +196,15 @@ app.get("/sse", (c) => {
     
     console.error(\`New SSE connection established: \${sessionId}\`);
     
-    // Store the transport
+    // Store the transport and bind the session to the opening credential
     transports[sessionId] = transport;
+    principals[sessionId] = c.get('inboundPrincipal');
     
     // Set up cleanup on transport close
     transport.onclose = () => {
       console.error(\`SSE connection closed for session \${sessionId}\`);
       delete transports[sessionId];
+      delete principals[sessionId];
     };
     
     // Make the transport available to the MCP server
@@ -205,8 +218,9 @@ app.get("/sse", (c) => {
         }
       };
       
-      // Connect to the MCP server
-      await server.connect(transport);
+      // Each SSE connection gets its own server instance (SDK >= 1.26 allows one
+      // transport per server).
+      await createServer().connect(transport);
     } catch (error) {
       console.error(\`Error connecting transport for session \${sessionId}:\`, error);
     }
@@ -228,7 +242,8 @@ app.post("/api/messages", async (c) => {
 
   const transport = transports[sessionId];
 
-  if (!transport) {
+  // Unknown session, or a different credential than the one that opened it.
+  if (!transport || principals[sessionId] !== c.get('inboundPrincipal')) {
     return c.json({ error: 'No active session found with the provided sessionId' }, 404);
   }
 ${

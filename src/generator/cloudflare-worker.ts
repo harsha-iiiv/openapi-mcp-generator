@@ -9,7 +9,7 @@
  */
 import { OpenAPIV3 } from 'openapi-types';
 import { jsonSchemaToZod } from 'json-schema-to-zod';
-import { McpToolDefinition } from '../types/index.js';
+import { InboundAuthMode, McpToolDefinition } from '../types/index.js';
 import { generateToolDefinitionMap } from '../utils/code-gen.js';
 
 /** A single generated file, relative to the output project root. */
@@ -25,6 +25,16 @@ export interface CloudflareWorkerGenInput {
   serverVersion: string;
   securitySchemes: OpenAPIV3.ComponentsObject['securitySchemes'];
   baseUrl: string;
+  /** Require `Authorization: Bearer <token>` on /mcp (issue #80). Default 'none'. */
+  inboundAuth?: InboundAuthMode;
+  /** Inbound header names forwarded to the upstream API per request (issue #55). */
+  headerPassthrough?: string[];
+}
+
+/** Lower-cased, de-duplicated passthrough header names. */
+function passthroughNames(input: CloudflareWorkerGenInput): string[] {
+  const names = Array.isArray(input.headerPassthrough) ? input.headerPassthrough : [];
+  return Array.from(new Set(names.map((n) => n.trim().toLowerCase()).filter(Boolean)));
 }
 
 /**
@@ -35,6 +45,7 @@ export function generateCloudflareWorkerFiles(input: CloudflareWorkerGenInput): 
   return [
     { path: 'src/index.ts', content: generateWorkerIndex(input) },
     { path: 'src/tools.ts', content: generateWorkerToolsFile(input) },
+    { path: 'src/upstream-auth.ts', content: generateWorkerUpstreamAuth(input) },
     { path: 'wrangler.jsonc', content: generateWranglerConfig(input) },
     { path: '.dev.vars.example', content: generateDevVarsExample(input) },
     { path: '.gitignore', content: generateWorkerGitignore() },
@@ -170,7 +181,7 @@ function buildRuntimeSecuritySchemes(
       const tokenUrl = scheme.flows?.clientCredentials?.tokenUrl ?? null;
       map[name] = { type: 'oauth2', tokenUrl };
     } else {
-      // openIdConnect or any other type: record the type so runtime can ignore gracefully.
+      // openIdConnect (bearer token from <SCHEME>_TOKEN) or any other type.
       map[name] = { type: scheme.type };
     }
   }
@@ -178,11 +189,106 @@ function buildRuntimeSecuritySchemes(
 }
 
 export function generateWorkerIndex(input: CloudflareWorkerGenInput): string {
-  const securitySchemesJson = JSON.stringify(
-    buildRuntimeSecuritySchemes(input.securitySchemes),
-    null,
-    2
-  );
+  const inboundAuth = input.inboundAuth === 'bearer';
+  const passthrough = passthroughNames(input);
+
+  const passthroughDecl =
+    passthrough.length > 0
+      ? `
+/** Inbound headers forwarded to the upstream API per request (--header-passthrough). */
+const PASSTHROUGH_HEADERS: string[] = ${JSON.stringify(passthrough)};
+
+/** Collects the configured passthrough headers present on this request. */
+function collectPassthroughHeaders(request: Request): Record<string, string> {
+  const forwarded: Record<string, string> = {};
+  for (const name of PASSTHROUGH_HEADERS) {
+    const value = request.headers.get(name);
+    if (value !== null) forwarded[name] = value;
+  }
+  return forwarded;
+}
+`
+      : '';
+
+  const envAuthFields = inboundAuth
+    ? `
+  /** Inbound bearer token for /mcp. Set with \`wrangler secret put MCP_AUTH_TOKEN\`. */
+  MCP_AUTH_TOKEN?: string;
+  /** Optional comma-separated token list, for rotating tokens without downtime. */
+  MCP_AUTH_TOKENS?: string;`
+    : '';
+
+  const inboundAuthDecl = inboundAuth
+    ? `
+/** Accepted inbound bearer tokens: MCP_AUTH_TOKENS (comma-separated) or MCP_AUTH_TOKEN. */
+function inboundTokens(env: Env): string[] {
+  return String(env.MCP_AUTH_TOKENS ?? env.MCP_AUTH_TOKEN ?? '')
+    .split(',')
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+async function sha256(value: string): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
+}
+
+/** Constant-time comparison of two equal-length digests. */
+function digestsEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+function jsonRpcError(status: number, message: string, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message }, id: null }), {
+    status,
+    headers: { 'content-type': 'application/json', ...headers },
+  });
+}
+
+/**
+ * Inbound authentication (generated with --inbound-auth bearer). Returns an error
+ * response when the request is not authorized, or null when it may proceed.
+ * Runs before any MCP message is parsed, so unauthenticated callers can neither
+ * list nor call tools.
+ */
+async function checkInboundAuth(request: Request, env: Env): Promise<Response | null> {
+  const tokens = inboundTokens(env);
+  if (tokens.length === 0) {
+    return jsonRpcError(
+      503,
+      'Inbound authentication is enabled but no MCP_AUTH_TOKEN secret is set (npx wrangler secret put MCP_AUTH_TOKEN).'
+    );
+  }
+  const match = /^Bearer[ \\t]+(\\S+)[ \\t]*$/i.exec(request.headers.get('authorization') ?? '');
+  if (match) {
+    const presented = await sha256(match[1]);
+    let authorized = false;
+    for (const token of tokens) {
+      // Check every configured token so timing does not reveal which one matched.
+      if (digestsEqual(presented, await sha256(token))) authorized = true;
+    }
+    if (authorized) return null;
+  }
+  return jsonRpcError(401, 'Unauthorized: send "Authorization: Bearer <token>".', {
+    'www-authenticate': 'Bearer realm="mcp"',
+  });
+}
+`
+    : '';
+
+  const inboundAuthCheck = inboundAuth
+    ? `
+    // Inbound authentication (--inbound-auth bearer): refuse before any tool can run.
+    if (request.method !== 'OPTIONS') {
+      const denied = await checkInboundAuth(request, env);
+      if (denied) return denied;
+    }`
+    : '';
+
+  const forwardedExpr = passthrough.length > 0 ? 'collectPassthroughHeaders(request)' : '{}';
+
   return `/**
  * Cloudflare Worker MCP server (Streamable HTTP at /mcp).
  * Generated by openapi-mcp-generator. Deploy with: npx wrangler deploy
@@ -190,6 +296,7 @@ export function generateWorkerIndex(input: CloudflareWorkerGenInput): string {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { toolDefinitionMap, toolZodShapes, type McpToolDefinition } from './tools.js';
+import { applyAuth } from './upstream-auth.js';
 
 const SERVER_NAME = ${JSON.stringify(input.serverName)};
 const SERVER_VERSION = ${JSON.stringify(input.serverVersion)};
@@ -197,34 +304,37 @@ const MCP_ROUTE = '/mcp';
 
 export interface Env {
   /** Upstream API base URL (set in wrangler.jsonc vars or as a secret). */
-  API_BASE_URL?: string;
+  API_BASE_URL?: string;${envAuthFields}
   /** Secrets are injected at runtime via \`wrangler secret put\`. */
   [key: string]: string | undefined;
 }
-
+${passthroughDecl}
 // A fresh McpServer is created per request. MCP SDK >= 1.26 throws if a server
 // instance is connected to more than one transport, and sharing instances across
 // requests can leak one client's responses to another — so this must NOT be hoisted
-// to module scope.
-function createServer(env: Env): McpServer {
+// to module scope. Per-request headers are captured in the closure for the same reason.
+function createServer(env: Env, forwardedHeaders: Record<string, string>): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  // Registered through a loosened signature: the SDK's zod-compat generics can exceed
+  // TypeScript's instantiation depth on generated shapes (TS2589). Shapes are real zod.
+  const registerTool = server.tool.bind(server) as (...args: unknown[]) => unknown;
   for (const [name, def] of toolDefinitionMap) {
     const shape = toolZodShapes.get(name) ?? {};
-    server.tool(name, def.description, shape, (args: Record<string, unknown>) =>
-      executeApiTool(def, args, env)
+    registerTool(name, def.description, shape, (args: Record<string, unknown>) =>
+      executeApiTool(def, args, env, forwardedHeaders)
     );
   }
   return server;
 }
-
+${inboundAuthDecl}
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname !== MCP_ROUTE) {
       return new Response('Not found', { status: 404 });
-    }
+    }${inboundAuthCheck}
     // New server + transport per request (stateless, SDK >= 1.26 safe).
-    const server = createServer(env);
+    const server = createServer(env, ${forwardedExpr});
     const transport = new WebStandardStreamableHTTPServerTransport();
     await server.connect(transport);
     return transport.handleRequest(request);
@@ -233,14 +343,12 @@ export default {
 
 const DEFAULT_BASE_URL = ${JSON.stringify(input.baseUrl)};
 
-/** Runtime metadata for the spec's security schemes (embedded at generate time). */
-const SECURITY_SCHEMES: Record<string, { type: string; in?: string; name?: string; scheme?: string; tokenUrl?: string | null }> = ${securitySchemesJson};
-
 /** Execute one tool by issuing the upstream HTTP request via global fetch. */
 async function executeApiTool(
   def: McpToolDefinition,
   args: Record<string, unknown>,
-  env: Env
+  env: Env,
+  forwardedHeaders: Record<string, string>
 ): Promise<{ content: { type: 'text'; text: string }[]; isError?: boolean }> {
   try {
     const baseUrl = (env.API_BASE_URL || DEFAULT_BASE_URL || '').replace(/\\/+$/, '');
@@ -300,7 +408,15 @@ async function executeApiTool(
         def.requestBodyContentType.includes('json') ? JSON.stringify(bodyArg) : String(bodyArg);
     }
 
-    await applyAuth(def, env, headers, url);
+    // Upstream credentials: OR across requirement objects, AND within one (see upstream-auth.ts).
+    // Forwarded client headers count as credentials for the schemes they carry.
+    await applyAuth(def.securityRequirements, env, headers, url, forwardedHeaders);
+
+    // Header passthrough (--header-passthrough): this request's client headers
+    // override env-based auth for those names. Never shared across requests.
+    for (const [name, value] of Object.entries(forwardedHeaders)) {
+      headers[name] = value;
+    }
 
     const response = await fetch(url.toString(), { method: def.method.toUpperCase(), headers, body });
     const contentType = response.headers.get('content-type') ?? '';
@@ -329,93 +445,237 @@ function safePrettyJson(text: string): string {
     return text;
   }
 }
+`;
+}
 
 /**
- * Inject auth from env per the tool's security requirements, branching on each scheme's
- * actual type/placement (from SECURITY_SCHEMES). The first satisfiable scheme wins.
- * Async because oauth2 client-credentials performs a token fetch.
+ * src/upstream-auth.ts for the Worker: OpenAPI Security Requirement semantics
+ * (issue #81). Kept dependency-free so it can be audited and unit-tested alone.
  */
-async function applyAuth(
-  def: McpToolDefinition,
-  env: Env,
+export function generateWorkerUpstreamAuth(input: CloudflareWorkerGenInput): string {
+  const securitySchemesJson = JSON.stringify(
+    buildRuntimeSecuritySchemes(input.securitySchemes),
+    null,
+    2
+  );
+  return `/**
+ * Upstream API authentication for the generated MCP Worker.
+ * Generated by openapi-mcp-generator. Do not edit by hand.
+ *
+ * Implements OpenAPI Security Requirement semantics: each entry of a tool's
+ * securityRequirements is an alternative (OR), and every scheme inside one entry
+ * must be satisfied together (AND). Credentials for a whole alternative are
+ * resolved before any is applied, so an incomplete AND group is never sent.
+ */
+
+/** Runtime metadata for the spec's security schemes (embedded at generate time). */
+export const SECURITY_SCHEMES: Record<
+  string,
+  { type: string; in?: string; name?: string; scheme?: string; tokenUrl?: string | null }
+> = ${securitySchemesJson};
+
+/** Worker environment: vars from wrangler.jsonc plus secrets set with \`wrangler secret put\`. */
+export type AuthEnv = Record<string, string | undefined>;
+
+/** One OpenAPI security requirement: scheme name to the OAuth2 scopes it needs. */
+export type SecurityRequirement = Record<string, string[]>;
+
+interface UpstreamCredential {
+  location: 'header' | 'query' | 'cookie';
+  name: string;
+  value: string;
+}
+
+/** Client-credentials tokens cached per isolate, keyed by scheme, client and scope set. */
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+function envPrefix(schemeName: string): string {
+  return schemeName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+}
+
+async function fetchClientCredentialsToken(
+  schemeName: string,
+  tokenUrlFromSpec: string | null | undefined,
+  scopes: string[],
+  env: AuthEnv
+): Promise<string | null> {
+  const upper = envPrefix(schemeName);
+  const clientId = env[\`\${upper}_CLIENT_ID\`] ?? env.OAUTH_CLIENT_ID;
+  const clientSecret = env[\`\${upper}_CLIENT_SECRET\`] ?? env.OAUTH_CLIENT_SECRET;
+  const tokenUrl = tokenUrlFromSpec ?? env[\`\${upper}_TOKEN_URL\`] ?? env.OAUTH_TOKEN_URL;
+  if (!clientId || !clientSecret || !tokenUrl) return null;
+
+  const scope = scopes.join(' ');
+  const cacheKey = \`\${schemeName}|\${clientId}|\${scope}\`;
+  const cached = tokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.token;
+
+  try {
+    // Forward the operation's required scopes so scope-gated token servers
+    // (Auth0, Okta, Azure AD) issue a usable token.
+    const body = new URLSearchParams({ grant_type: 'client_credentials' });
+    if (scope) body.set('scope', scope);
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/x-www-form-urlencoded',
+        authorization: 'Basic ' + btoa(\`\${clientId}:\${clientSecret}\`),
+      },
+      body: body.toString(),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { access_token?: string; expires_in?: number };
+    if (!data.access_token) return null;
+    const lifetimeSeconds = typeof data.expires_in === 'number' ? data.expires_in : 3600;
+    // Refresh a minute before the token expires.
+    tokenCache.set(cacheKey, {
+      token: data.access_token,
+      expiresAt: Date.now() + Math.max(0, lifetimeSeconds - 60) * 1000,
+    });
+    return data.access_token;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolves one scheme's credential, or null when it is not configured or unobtainable. */
+async function resolveCredential(
+  schemeName: string,
+  scopes: string[],
+  env: AuthEnv
+): Promise<UpstreamCredential | null> {
+  const scheme = SECURITY_SCHEMES[schemeName];
+  if (!scheme) return null;
+  const upper = envPrefix(schemeName);
+
+  if (scheme.type === 'apiKey') {
+    const key = env[\`\${upper}_API_KEY\`] ?? env.API_KEY;
+    if (!key) return null;
+    const paramName = scheme.name ?? 'apiKey';
+    if (scheme.in === 'query') return { location: 'query', name: paramName, value: key };
+    if (scheme.in === 'cookie') {
+      return { location: 'cookie', name: paramName, value: encodeURIComponent(key) };
+    }
+    // 'header' or unknown placement.
+    return { location: 'header', name: paramName.toLowerCase(), value: key };
+  }
+
+  if (scheme.type === 'http' && scheme.scheme === 'basic') {
+    const user = env[\`\${upper}_USERNAME\`] ?? env.API_USERNAME;
+    if (!user) return null;
+    const pass = env[\`\${upper}_PASSWORD\`] ?? env.API_PASSWORD ?? '';
+    return { location: 'header', name: 'authorization', value: 'Basic ' + btoa(\`\${user}:\${pass}\`) };
+  }
+
+  if (scheme.type === 'http') {
+    // bearer or any other http scheme: generic token.
+    const token = env[\`\${upper}_TOKEN\`] ?? env.API_TOKEN;
+    if (!token) return null;
+    return { location: 'header', name: 'authorization', value: \`Bearer \${token}\` };
+  }
+
+  if (scheme.type === 'openIdConnect') {
+    const token = env[\`\${upper}_TOKEN\`];
+    if (!token) return null;
+    return { location: 'header', name: 'authorization', value: \`Bearer \${token}\` };
+  }
+
+  if (scheme.type === 'oauth2') {
+    const token = await fetchClientCredentialsToken(schemeName, scheme.tokenUrl, scopes, env);
+    if (!token) return null;
+    return { location: 'header', name: 'authorization', value: \`Bearer \${token}\` };
+  }
+
+  return null;
+}
+
+/** The request header a scheme's credential travels in, when it travels in one. */
+function credentialHeaderName(schemeName: string): string | undefined {
+  const scheme = SECURITY_SCHEMES[schemeName];
+  if (!scheme) return undefined;
+  if (scheme.type === 'apiKey') {
+    return scheme.in === 'query' || scheme.in === 'cookie'
+      ? undefined
+      : (scheme.name ?? 'apiKey').toLowerCase();
+  }
+  if (scheme.type === 'http' || scheme.type === 'oauth2' || scheme.type === 'openIdConnect') {
+    return 'authorization';
+  }
+  return undefined;
+}
+
+/** True when two credentials of one requirement would overwrite each other. */
+function hasConflict(credentials: UpstreamCredential[]): boolean {
+  const seen = new Set<string>();
+  for (const credential of credentials) {
+    // Several cookies combine into one Cookie header, so they never conflict.
+    if (credential.location === 'cookie') continue;
+    const key = credential.location + ':' + credential.name.toLowerCase();
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  return false;
+}
+
+function applyCredential(
+  credential: UpstreamCredential,
   headers: Record<string, string>,
   url: URL
-): Promise<void> {
-  // securityRequirements is an array of { schemeName: scopes[] } objects.
-  for (const requirement of def.securityRequirements) {
-    for (const schemeName of Object.keys(requirement)) {
-      const upper = schemeName.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-      const scheme = SECURITY_SCHEMES[schemeName];
-      if (!scheme) continue;
-
-      if (scheme.type === 'apiKey') {
-        const key = env[\`\${upper}_API_KEY\`] ?? env.API_KEY;
-        if (!key) continue;
-        const paramName = scheme.name ?? 'apiKey';
-        if (scheme.in === 'query') {
-          url.searchParams.set(paramName, key);
-        } else if (scheme.in === 'cookie') {
-          const existing = headers['cookie'];
-          const cookiePair = paramName + '=' + encodeURIComponent(key);
-          headers['cookie'] = (existing ? existing + '; ' : '') + cookiePair;
-        } else {
-          // 'header' or unknown placement.
-          headers[paramName.toLowerCase()] = key;
-        }
-        return;
-      }
-
-      if (scheme.type === 'http' && scheme.scheme === 'basic') {
-        const user = env[\`\${upper}_USERNAME\`] ?? env.API_USERNAME;
-        if (!user) continue;
-        const pass = env[\`\${upper}_PASSWORD\`] ?? env.API_PASSWORD ?? '';
-        headers['authorization'] = 'Basic ' + btoa(\`\${user}:\${pass}\`);
-        return;
-      }
-
-      if (scheme.type === 'http') {
-        // bearer or any other http scheme: generic token.
-        const token = env[\`\${upper}_TOKEN\`] ?? env.API_TOKEN;
-        if (!token) continue;
-        headers['authorization'] = \`Bearer \${token}\`;
-        return;
-      }
-
-      if (scheme.type === 'oauth2') {
-        const clientId = env[\`\${upper}_CLIENT_ID\`] ?? env.OAUTH_CLIENT_ID;
-        const clientSecret = env[\`\${upper}_CLIENT_SECRET\`] ?? env.OAUTH_CLIENT_SECRET;
-        const tokenUrl = scheme.tokenUrl ?? env[\`\${upper}_TOKEN_URL\`] ?? env.OAUTH_TOKEN_URL;
-        if (!clientId || !clientSecret || !tokenUrl) continue;
-        try {
-          // Forward the operation's required scopes (from securityRequirements)
-          // so scope-gated token servers (Auth0/Okta/Azure AD) issue a usable token.
-          const tokenBody = new URLSearchParams({ grant_type: 'client_credentials' });
-          const scopes = requirement[schemeName];
-          if (Array.isArray(scopes) && scopes.length > 0) {
-            tokenBody.set('scope', scopes.join(' '));
-          }
-          const tokenResponse = await fetch(tokenUrl, {
-            method: 'POST',
-            headers: {
-              accept: 'application/json',
-              'content-type': 'application/x-www-form-urlencoded',
-              authorization: 'Basic ' + btoa(\`\${clientId}:\${clientSecret}\`),
-            },
-            body: tokenBody.toString(),
-          });
-          if (!tokenResponse.ok) continue;
-          const tokenData = (await tokenResponse.json()) as { access_token?: string };
-          const accessToken = tokenData.access_token;
-          if (!accessToken) continue;
-          headers['authorization'] = \`Bearer \${accessToken}\`;
-          return;
-        } catch {
-          // On token-fetch failure, leave auth unset; the upstream call surfaces a 401.
-          continue;
-        }
-      }
-    }
+): void {
+  if (credential.location === 'query') {
+    url.searchParams.set(credential.name, credential.value);
+  } else if (credential.location === 'cookie') {
+    const existing = headers['cookie'];
+    headers['cookie'] = (existing ? existing + '; ' : '') + credential.name + '=' + credential.value;
+  } else {
+    headers[credential.name] = credential.value;
   }
+}
+
+/**
+ * Applies upstream credentials for one tool call.
+ *
+ * Alternatives are tried in order; the first whose schemes ALL resolve is applied.
+ * An empty alternative ({}) makes auth optional and is skipped in favour of one we
+ * can satisfy. Returns the applied scheme names, or null when no alternative was
+ * complete, in which case the request goes out without upstream credentials and
+ * the API decides (typically 401).
+ *
+ * \`forwarded\` holds this request's passthrough headers (--header-passthrough). A
+ * forwarded header satisfies the scheme whose credential travels in it, so a client
+ * that sends its own API key still gets the other schemes of an AND requirement.
+ */
+export async function applyAuth(
+  securityRequirements: SecurityRequirement[] | undefined,
+  env: AuthEnv,
+  headers: Record<string, string>,
+  url: URL,
+  forwarded: Record<string, string> = {}
+): Promise<string[] | null> {
+  const requirements = Array.isArray(securityRequirements) ? securityRequirements : [];
+  for (const requirement of requirements) {
+    const entries = Object.entries(requirement ?? {});
+    if (entries.length === 0) continue;
+    const credentials: UpstreamCredential[] = [];
+    let complete = true;
+    for (const [schemeName, scopes] of entries) {
+      const headerName = credentialHeaderName(schemeName);
+      const credential: UpstreamCredential | null =
+        headerName !== undefined && forwarded[headerName] !== undefined
+          ? { location: 'header', name: headerName, value: forwarded[headerName] }
+          : await resolveCredential(schemeName, Array.isArray(scopes) ? scopes : [], env);
+      if (!credential) {
+        complete = false;
+        break;
+      }
+      credentials.push(credential);
+    }
+    if (!complete || hasConflict(credentials)) continue;
+    for (const credential of credentials) applyCredential(credential, headers, url);
+    return entries.map(([schemeName]) => schemeName);
+  }
+  return null;
 }
 `;
 }
@@ -472,10 +732,21 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
         if (!tokenUrl) {
           lines.push(`${upper}_TOKEN_URL="..."`);
         }
+      } else if (scheme && 'type' in scheme && scheme.type === 'openIdConnect') {
+        lines.push(`${upper}_TOKEN="..."`);
       } else {
         lines.push(`${upper}_API_KEY="..."`);
       }
     }
+  }
+  if (input.inboundAuth === 'bearer') {
+    lines.push(
+      '',
+      '# Inbound bearer token MCP clients must send to /mcp (Authorization: Bearer <token>).',
+      '# Generate one with: openssl rand -hex 32',
+      '# To rotate without downtime, set MCP_AUTH_TOKENS="new-token,old-token" instead.',
+      'MCP_AUTH_TOKEN="..."'
+    );
   }
   return lines.join('\n') + '\n';
 }
@@ -501,7 +772,9 @@ export function generateWorkerPackageJson(input: CloudflareWorkerGenInput): stri
       zod: '^3.24.3',
     },
     devDependencies: {
-      '@cloudflare/workers-types': '^4.20250601.0',
+      // wrangler 4.15x declares an optional peer on workers-types v5; a v4 pin makes
+      // a fresh \`npm install\` fail with ERESOLVE.
+      '@cloudflare/workers-types': '^5.20261019.1',
       typescript: '^5.8.3',
       wrangler: '^4.0.0',
     },
@@ -564,9 +837,65 @@ export function generateWorkerReadme(input: CloudflareWorkerGenInput): string {
             if (scheme && 'type' in scheme && scheme.type === 'http') {
               return `   npx wrangler secret put ${upper}_TOKEN`;
             }
+            if (scheme && 'type' in scheme && scheme.type === 'openIdConnect') {
+              return `   npx wrangler secret put ${upper}_TOKEN`;
+            }
             return `   npx wrangler secret put ${upper}_API_KEY`;
           })
           .join('\n');
+  const inboundAuth = input.inboundAuth === 'bearer';
+  const passthrough = passthroughNames(input);
+  const inboundSecretLine = inboundAuth
+    ? '\n   npx wrangler secret put MCP_AUTH_TOKEN   # inbound token clients send to /mcp'
+    : '';
+  const securitySection = inboundAuth
+    ? `## Authentication
+
+This server was generated with \`--inbound-auth bearer\`: every request to \`/mcp\` must carry
+\`Authorization: Bearer <token>\`. Unauthenticated requests are refused with \`401\` before any tool
+can run, and the Worker answers \`503\` until a token is configured.
+
+\`\`\`bash
+openssl rand -hex 32                  # generate a token
+npx wrangler secret put MCP_AUTH_TOKEN
+\`\`\`
+
+To rotate without downtime, set \`MCP_AUTH_TOKENS\` to a comma-separated list (\`new,old\`), update
+your clients, then remove the old token. Tokens live only in Wrangler secrets (or \`.dev.vars\` for
+local development), never in generated files.
+
+Clients that support custom headers (Claude Code, Cursor, VS Code, MCP Inspector, \`mcp-remote\`)
+send the token directly, for example:
+
+\`\`\`bash
+claude mcp add --transport http ${input.serverName} https://${input.serverName}.<your-subdomain>.workers.dev/mcp \\
+  --header "Authorization: Bearer <token>"
+\`\`\`
+
+Claude.ai and ChatGPT connectors use OAuth or no authentication rather than a static token; for those,
+put the Worker behind [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/secure-mcp-servers/)
+or an OAuth provider such as [\`@cloudflare/workers-oauth-provider\`](https://developers.cloudflare.com/agents/model-context-protocol/protocol/authorization/).
+`
+    : `## ⚠️ Security: this server is public by default
+
+Once deployed, anyone who discovers the \`workers.dev\` URL can call your tools — and your tools call the upstream API using the secrets you configured. For anything beyond a public/demo API, add authentication in front of \`/mcp\`:
+
+- **Shared token (quickest):** regenerate with \`--inbound-auth bearer\`, then \`npx wrangler secret put MCP_AUTH_TOKEN\`. Clients must send \`Authorization: Bearer <token>\`.
+- **Per-user keys:** regenerate with \`--header-passthrough X-API-Key\` (or your API's header) so each client sends its own upstream key and the Worker stores none.
+- **Cloudflare Access:** put the Worker behind [Access for SaaS](https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/secure-mcp-servers/) so users sign in with your identity provider before reaching it.
+- **OAuth:** use [\`@cloudflare/workers-oauth-provider\`](https://developers.cloudflare.com/agents/model-context-protocol/protocol/authorization/) to require a sign-in flow.
+`;
+  const passthroughSection =
+    passthrough.length > 0
+      ? `
+## Per-user upstream credentials (header passthrough)
+
+These request headers are forwarded from each MCP client to the upstream API, overriding any
+secret configured for the same header: ${passthrough.map((h) => `\`${h}\``).join(', ')}.
+They are read per request and never stored or shared between requests, so each user can bring
+their own API key, for example \`"headers": { "${passthrough[0]}": "<your key>" }\` in the client config.
+`
+      : '';
   return `# ${input.serverName}
 
 A remote MCP server for **${input.serverName}**, generated by [openapi-mcp-generator](https://github.com/harsha-iiiv/openapi-mcp-generator) and ready to deploy on Cloudflare Workers.
@@ -584,7 +913,7 @@ It serves the Model Context Protocol over **Streamable HTTP** at \`/mcp\`.
 2. Set your upstream API secrets (encrypted, per-Worker):
 
 \`\`\`bash
-${secretLines}
+${secretLines}${inboundSecretLine}
 \`\`\`
 
 3. Deploy to your own Cloudflare account (Wrangler will prompt you to log in):
@@ -611,12 +940,5 @@ npm run dev                      # http://localhost:8787/mcp
 
 Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) or, from Claude Desktop, the [mcp-remote](https://www.npmjs.com/package/mcp-remote) proxy pointed at your \`/mcp\` URL.
 
-## ⚠️ Security: this server is public by default
-
-Once deployed, anyone who discovers the \`workers.dev\` URL can call your tools — and your tools call the upstream API using the secrets you configured. For anything beyond a public/demo API, add authentication in front of \`/mcp\`:
-
-- **Cloudflare Access (recommended):** put the Worker behind [Access for SaaS](https://developers.cloudflare.com/cloudflare-one/access-controls/ai-controls/secure-mcp-servers/) so users sign in with your identity provider before reaching it.
-- **OAuth:** use [\`@cloudflare/workers-oauth-provider\`](https://developers.cloudflare.com/agents/model-context-protocol/protocol/authorization/) to require a sign-in flow.
-- **Shared token (quickest):** add a check at the top of \`fetch()\` in \`src/index.ts\`, after the route check and before creating the server, comparing \`request.headers.get('authorization')\` to a \`Bearer\` token read from \`env\`; set it with \`npx wrangler secret put MCP_AUTH_TOKEN\` and send it from your MCP client.
-`;
+${securitySection}${passthroughSection}`;
 }

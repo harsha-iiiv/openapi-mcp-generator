@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--inbound-auth bearer` (#80): HTTP transports (`web`, `streamable-http`,
+  `cloudflare-worker`) require `Authorization: Bearer <token>` before any MCP message is
+  processed. Tokens are read at runtime from `MCP_AUTH_TOKEN`, or comma-separated
+  `MCP_AUTH_TOKENS` for rotation, compared in constant time, and never written to generated
+  files. With no token configured the endpoint fails closed (`503`); `/health` stays public.
+  The default, `none`, keeps existing output unchanged. stdio is documented as out of scope
+  because it has no network endpoint.
+- Sessions on `streamable-http` and `web` are bound to the credential that opened them: a
+  session ID replayed with a different token is answered `404`, as if it did not exist.
+- `--header-passthrough` now works on `cloudflare-worker` (#55): the listed headers are
+  forwarded per request to the upstream API, overriding env secrets for the same header.
+- A generation-time warning when an HTTP target would hold upstream credentials without
+  inbound auth.
+- OpenID Connect schemes on the Worker target read `<SCHEME>_TOKEN`; `.env.example` lists
+  `OPENID_TOKEN_<SCHEME>` for Node targets.
+
+### Fixed
+
+- Security requirements follow OpenAPI semantics on Node and Worker targets (#81).
+  Requirement objects are alternatives (OR) and every scheme inside one must be satisfied
+  (AND). Credentials for an alternative are resolved before any is applied, so an incomplete
+  AND group is never sent. `{}` makes authentication optional and is used only when no other
+  alternative is complete. OAuth2 tokens are requested with the operation's scopes and cached
+  per scope set.
+- `streamable-http`: generated servers crashed on a client's second request with current MCP
+  SDK releases (`ReadableStream is locked`, from `fetch-to-node` re-reading a consumed body).
+  The transport now uses the SDK's `WebStandardStreamableHTTPServerTransport` with Hono
+  directly, and `fetch-to-node` is no longer a dependency.
+- `streamable-http` and `web`: every session or SSE connection gets its own server instance.
+  MCP SDK 1.26 and later refuse to connect one server to a second transport, so concurrent
+  clients failed.
+- The generated Worker `src/index.ts` type-checks with current SDK typings (TS2589 on
+  `server.tool`).
+- Generated Node projects depend on `@modelcontextprotocol/sdk` `^1.26.0`.
+- `web` and `streamable-http` validate the `Origin` header, as the MCP Streamable HTTP
+  binding requires: browser requests from origins that are not loopback or listed in
+  `MCP_ALLOWED_ORIGINS` get `403`, which blocks DNS-rebinding attacks on local servers.
+  Clients that send no `Origin` header (most MCP clients) are unaffected.
+- Unknown tools, invalid arguments and upstream failures return `isError: true`.
+- Generated Worker projects install cleanly again: `@cloudflare/workers-types` is pinned to v5,
+  matching current wrangler's peer range (a fresh `npm install` failed with ERESOLVE).
+- `--header-passthrough` headers count as credentials during security resolution on Node and
+  Worker targets. A client that forwards its own API key no longer leaves an AND requirement
+  incomplete when the server holds no key for that scheme, so the requirement's other
+  credentials (for example an OAuth2 token) are sent too.
+- `streamable-http`: sessions are released on every close path, and sessions idle longer than
+  `MCP_SESSION_IDLE_TIMEOUT` seconds (default 1800, `0` disables) are closed; an open stream or
+  a request in flight keeps a session in use. Clients that
+  disconnected without `DELETE` previously kept their server instance in memory until restart.
+
+### Changed
+
+- Worker upstream auth moved into a dependency-free `src/upstream-auth.ts`; client-credentials
+  tokens are cached per isolate.
+- `--header-passthrough` ignores connection-level headers such as `host` and `content-length`
+  with a warning, and refuses `authorization` together with `--inbound-auth bearer`.
+
+### Development
+
+- Behavioral test suites for security semantics, inbound auth and header passthrough: generated
+  servers are compiled and run against a local mock upstream API. Dependencies of generated
+  projects are devDependencies, so `npm test` runs self-contained.
+- `SECURITY.md` with a private reporting channel, response targets and past advisories.
+
 ## [4.1.0] - 2026-06-14
 
 ### Added

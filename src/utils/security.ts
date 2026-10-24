@@ -146,14 +146,18 @@ declare global {
  * 
  * @param schemeName Name of the security scheme
  * @param scheme OAuth2 security scheme
+ * @param requiredScopes Scopes declared by the operation's security requirement
  * @returns Acquired token or null if unable to acquire
  */
-async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<string | null | undefined> {
+async function acquireOAuth2Token(schemeName: string, scheme: any, requiredScopes: string[] = []): Promise<string | null | undefined> {
     try {
         // Check if we have the necessary credentials (resolved per-scheme at runtime)
         const clientId = ${env('OAUTH_CLIENT_ID')};
         const clientSecret = ${env('OAUTH_CLIENT_SECRET')};
-        const scopes = ${env('OAUTH_SCOPES')};
+        const configuredScopes = ${env('OAUTH_SCOPES')};
+        // An explicit OAUTH_SCOPES_<SCHEME> wins; otherwise request the scopes the
+        // operation's security requirement declares (issue #81).
+        const scopes = configuredScopes || (requiredScopes.length > 0 ? requiredScopes.join(' ') : '');
 
         if (!clientId || !clientSecret) {
             console.error(\`Missing client credentials for OAuth2 scheme '\${schemeName}'\`);
@@ -166,7 +170,8 @@ async function acquireOAuth2Token(schemeName: string, scheme: any): Promise<stri
         }
         
         // Check if we have a cached token
-        const cacheKey = \`\${schemeName}_\${clientId}\`;
+        // Cache per scope set so a narrower token is never reused for a wider requirement.
+        const cacheKey = \`\${schemeName}_\${clientId}_\${scopes}\`;
         const cachedToken = global.__oauthTokenCache[cacheKey];
         const now = Date.now();
         
@@ -332,183 +337,300 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
   const headerPassthroughNames = Array.isArray(options.headerPassthrough)
     ? options.headerPassthrough.filter(Boolean)
     : [];
-  const headerPassthroughCode =
+  // The configured headers this request carries are collected before upstream auth,
+  // so they also count as credentials for the schemes they carry.
+  const forwardedHeadersCode =
     headerPassthroughNames.length > 0
       ? `
-    // Forward configured inbound headers to the upstream API (issue #55)
+    // Configured inbound headers present on this request (issue #55)
     const __passthroughHeaderNames = ${JSON.stringify(headerPassthroughNames.map((h) => h.toLowerCase()))};
+    const forwardedHeaders: Record<string, string> = {};
     const __inboundHeaders = inboundHeaderStore.getStore();
     if (__inboundHeaders) {
         for (const __name of __passthroughHeaderNames) {
             const __val = __inboundHeaders[__name];
             if (typeof __val !== 'undefined') {
-                headers[__name] = __val;
+                forwardedHeaders[__name] = __val;
             }
         }
     }
 `
+      : `
+    const forwardedHeaders: Record<string, string> = {};
+`;
+  const headerPassthroughCode =
+    headerPassthroughNames.length > 0
+      ? `
+    // Forward configured inbound headers to the upstream API (issue #55)
+    for (const [__name, __val] of Object.entries(forwardedHeaders)) {
+        headers[__name] = __val;
+    }
+`
       : '';
 
-  // Generate security handling code for checking, applying security
+  // Upstream auth (issue #81): OpenAPI Security Requirement semantics. Every
+  // requirement object is an alternative (OR); every scheme inside one object must
+  // be satisfied together (AND). Credentials are resolved for a whole alternative
+  // before any are applied, so an incomplete AND group is never sent.
   const securityCode = `
-    // Apply security requirements if available
-    // Security requirements use OR between array items and AND within each object
-    const appliedSecurity = definition.securityRequirements?.find(req => {
-        // Try each security requirement (combined with OR)
-        return Object.entries(req).every(([schemeName, scopesArray]) => {
-            const scheme = allSecuritySchemes[schemeName];
-            if (!scheme) return false;
-            
-            // API Key security (header, query, cookie)
-            if (scheme.type === 'apiKey') {
-                return !!process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-            }
-            
-            // HTTP security (basic, bearer)
-            if (scheme.type === 'http') {
-                if (scheme.scheme?.toLowerCase() === 'bearer') {
-                    return !!process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                }
-                else if (scheme.scheme?.toLowerCase() === 'basic') {
-                    // Username is sufficient; an empty password is valid per RFC 7617 (issue #66)
-                    return process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] != null;
-                }
-            }
-            
-            // OAuth2 security
-            if (scheme.type === 'oauth2') {
-                // Check for pre-existing token
-                if (process.env[\`OAUTH_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`]) {
-                    return true;
-                }
-                
-                // Check for client credentials for auto-acquisition
-                if (process.env[\`OAUTH_CLIENT_ID_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`] &&
-                    process.env[\`OAUTH_CLIENT_SECRET_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`]) {
-                    // Verify we have a supported flow
-                    if (scheme.flows?.clientCredentials || scheme.flows?.password) {
-                        return true;
-                    }
-                }
-                
-                return false;
-            }
-            
-            // OpenID Connect
-            if (scheme.type === 'openIdConnect') {
-                return !!process.env[\`OPENID_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-            }
-            
-            return false;
-        });
-    });
-
-    // If we found matching security scheme(s), apply them
-    if (appliedSecurity) {
-        // Apply each security scheme from this requirement (combined with AND)
-        for (const [schemeName, scopesArray] of Object.entries(appliedSecurity)) {
-            const scheme = allSecuritySchemes[schemeName];
-            
-            // API Key security
-            if (scheme?.type === 'apiKey') {
-                const apiKey = process.env[\`API_KEY_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                if (apiKey) {
-                    if (scheme.in === 'header') {
-                        headers[scheme.name.toLowerCase()] = apiKey;
-                        console.error(\`Applied API key '\${schemeName}' in header '\${scheme.name}'\`);
-                    }
-                    else if (scheme.in === 'query') {
-                        queryParams[scheme.name] = apiKey;
-                        console.error(\`Applied API key '\${schemeName}' in query parameter '\${scheme.name}'\`);
-                    }
-                    else if (scheme.in === 'cookie') {
-                        // Add the cookie, preserving other cookies if they exist
-                        headers['cookie'] = \`\${scheme.name}=\${apiKey}\${headers['cookie'] ? \`; \${headers['cookie']}\` : ''}\`;
-                        console.error(\`Applied API key '\${schemeName}' in cookie '\${scheme.name}'\`);
-                    }
-                }
-            } 
-            // HTTP security (Bearer or Basic)
-            else if (scheme?.type === 'http') {
-                if (scheme.scheme?.toLowerCase() === 'bearer') {
-                    const token = process.env[\`BEARER_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                    if (token) {
-                        headers['authorization'] = \`Bearer \${token}\`;
-                        console.error(\`Applied Bearer token for '\${schemeName}'\`);
-                    }
-                } 
-                else if (scheme.scheme?.toLowerCase() === 'basic') {
-                    const username = process.env[\`BASIC_USERNAME_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                    const password = process.env[\`BASIC_PASSWORD_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                    // Empty password is valid per RFC 7617 (issue #66); only username is required.
-                    if (username != null) {
-                        headers['authorization'] = \`Basic \${Buffer.from(\`\${username}:\${password ?? ''}\`).toString('base64')}\`;
-                        console.error(\`Applied Basic authentication for '\${schemeName}'\`);
-                    }
-                }
-            }
-            // OAuth2 security
-            else if (scheme?.type === 'oauth2') {
-                // First try to use a pre-provided token
-                let token = process.env[\`OAUTH_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                
-                // If no token but we have client credentials, try to acquire a token
-                if (!token && (scheme.flows?.clientCredentials || scheme.flows?.password)) {
-                    console.error(\`Attempting to acquire OAuth token for '\${schemeName}'\`);
-                    token = (await acquireOAuth2Token(schemeName, scheme)) ?? '';
-                }
-                
-                // Apply token if available
-                if (token) {
-                    headers['authorization'] = \`Bearer \${token}\`;
-                    console.error(\`Applied OAuth2 token for '\${schemeName}'\`);
-                    
-                    // List the scopes that were requested, if any
-                    const scopes = scopesArray as string[];
-                    if (scopes && scopes.length > 0) {
-                        console.error(\`Requested scopes: \${scopes.join(', ')}\`);
-                    }
-                }
-            }
-            // OpenID Connect
-            else if (scheme?.type === 'openIdConnect') {
-                const token = process.env[\`OPENID_TOKEN_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
-                if (token) {
-                    headers['authorization'] = \`Bearer \${token}\`;
-                    console.error(\`Applied OpenID Connect token for '\${schemeName}'\`);
-                    
-                    // List the scopes that were requested, if any
-                    const scopes = scopesArray as string[];
-                    if (scopes && scopes.length > 0) {
-                        console.error(\`Requested scopes: \${scopes.join(', ')}\`);
-                    }
-                }
-            }
+    // Apply upstream credentials for this operation's security requirements
+    // (OR across requirement objects, AND within one; see resolveSecurityRequirements).
+    const securityResolution = await resolveSecurityRequirements(definition.securityRequirements, allSecuritySchemes, forwardedHeaders);
+    if (securityResolution.status === 'applied') {
+        for (const credential of securityResolution.credentials) {
+            applyUpstreamCredential(credential, headers, queryParams);
+            console.error(\`Applied \${credential.description}\`);
         }
-    } 
-    // Log warning if security is required but not available
-    else if (definition.securityRequirements?.length > 0) {
-        // First generate a more readable representation of the security requirements
-        const securityRequirementsString = definition.securityRequirements
-            .map(req => {
-                const parts = Object.entries(req)
-                    .map(([name, scopesArray]) => {
-                        const scopes = scopesArray as string[];
-                        if (scopes.length === 0) return name;
-                        return \`\${name} (scopes: \${scopes.join(', ')})\`;
-                    })
-                    .join(' AND ');
-                return \`[\${parts}]\`;
-            })
-            .join(' OR ');
-            
-        console.warn(\`Tool '\${toolName}' requires security: \${securityRequirementsString}, but no suitable credentials found.\`);
+    } else if (securityResolution.status === 'unsatisfied') {
+        console.warn(\`Tool '\${toolName}' requires security: \${securityResolution.summary}, but no complete set of credentials is configured. Sending the request without upstream credentials.\`);
     }
     `;
 
+  // Helpers emitted once at module scope, next to the OAuth2 token code.
+  const securityResolutionHelpers = `
+/**
+ * A credential to place on the upstream request for one security scheme.
+ */
+interface UpstreamCredential {
+    schemeName: string;
+    location: 'header' | 'query' | 'cookie';
+    name: string;
+    value: string;
+    description: string;
+}
+
+/**
+ * Outcome of resolving a tool's OpenAPI security requirements.
+ */
+type SecurityResolution =
+    | { status: 'none' }
+    | { status: 'optional' }
+    | { status: 'applied'; credentials: UpstreamCredential[] }
+    | { status: 'unsatisfied'; summary: string };
+
+/**
+ * Reads a per-scheme credential from the environment, e.g. API_KEY_PETSTORE_AUTH.
+ */
+function getSchemeEnv(prefix: string, schemeName: string): string | undefined {
+    return process.env[\`\${prefix}_\${schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()}\`];
+}
+
+/**
+ * Resolves the credential for one security scheme, or null when it is not
+ * configured or cannot be obtained (for example, an OAuth2 token request failed).
+ */
+async function resolveSchemeCredential(
+    schemeName: string,
+    scheme: any,
+    scopes: string[]
+): Promise<UpstreamCredential | null> {
+    if (!scheme) return null;
+
+    // API Key security (header, query, cookie)
+    if (scheme.type === 'apiKey') {
+        const apiKey = getSchemeEnv('API_KEY', schemeName);
+        if (!apiKey || !scheme.name) return null;
+        const location: UpstreamCredential['location'] =
+            scheme.in === 'query' ? 'query' : scheme.in === 'cookie' ? 'cookie' : 'header';
+        return {
+            schemeName,
+            location,
+            name: location === 'header' ? String(scheme.name).toLowerCase() : String(scheme.name),
+            value: apiKey,
+            description: \`API key '\${schemeName}' in \${location} '\${scheme.name}'\`,
+        };
+    }
+
+    // HTTP security (bearer, basic)
+    if (scheme.type === 'http') {
+        const httpScheme = String(scheme.scheme ?? '').toLowerCase();
+        if (httpScheme === 'bearer') {
+            const token = getSchemeEnv('BEARER_TOKEN', schemeName);
+            if (!token) return null;
+            return {
+                schemeName,
+                location: 'header',
+                name: 'authorization',
+                value: \`Bearer \${token}\`,
+                description: \`Bearer token for '\${schemeName}'\`,
+            };
+        }
+        if (httpScheme === 'basic') {
+            const username = getSchemeEnv('BASIC_USERNAME', schemeName);
+            // Empty password is valid per RFC 7617 (issue #66); only username is required.
+            if (username == null) return null;
+            const password = getSchemeEnv('BASIC_PASSWORD', schemeName) ?? '';
+            return {
+                schemeName,
+                location: 'header',
+                name: 'authorization',
+                value: \`Basic \${Buffer.from(\`\${username}:\${password}\`).toString('base64')}\`,
+                description: \`Basic authentication for '\${schemeName}'\`,
+            };
+        }
+        return null;
+    }
+
+    // OAuth2: a pre-provided token, or client credentials for automatic acquisition
+    if (scheme.type === 'oauth2') {
+        let token = getSchemeEnv('OAUTH_TOKEN', schemeName);
+        if (!token && (scheme.flows?.clientCredentials || scheme.flows?.password)) {
+            token = (await acquireOAuth2Token(schemeName, scheme, scopes)) ?? undefined;
+        }
+        if (!token) return null;
+        return {
+            schemeName,
+            location: 'header',
+            name: 'authorization',
+            value: \`Bearer \${token}\`,
+            description: \`OAuth2 token for '\${schemeName}'\${scopes.length > 0 ? \` (scopes: \${scopes.join(', ')})\` : ''}\`,
+        };
+    }
+
+    // OpenID Connect
+    if (scheme.type === 'openIdConnect') {
+        const token = getSchemeEnv('OPENID_TOKEN', schemeName);
+        if (!token) return null;
+        return {
+            schemeName,
+            location: 'header',
+            name: 'authorization',
+            value: \`Bearer \${token}\`,
+            description: \`OpenID Connect token for '\${schemeName}'\`,
+        };
+    }
+
+    return null;
+}
+
+/**
+ * The request header a scheme's credential travels in, when it travels in one.
+ */
+function credentialHeaderName(scheme: any): string | undefined {
+    if (!scheme) return undefined;
+    if (scheme.type === 'apiKey') {
+        return scheme.in === 'query' || scheme.in === 'cookie' || !scheme.name
+            ? undefined
+            : String(scheme.name).toLowerCase();
+    }
+    if (scheme.type === 'http' || scheme.type === 'oauth2' || scheme.type === 'openIdConnect') {
+        return 'authorization';
+    }
+    return undefined;
+}
+
+/**
+ * True when two credentials from one requirement would overwrite each other
+ * (for example, two schemes that both need the Authorization header).
+ */
+function hasConflictingCredentials(credentials: UpstreamCredential[]): boolean {
+    const seen = new Set<string>();
+    for (const credential of credentials) {
+        // Several cookies combine into one Cookie header, so they never conflict.
+        if (credential.location === 'cookie') continue;
+        const key = \`\${credential.location}:\${credential.name.toLowerCase()}\`;
+        if (seen.has(key)) return true;
+        seen.add(key);
+    }
+    return false;
+}
+
+/**
+ * Places one resolved credential on the outgoing request.
+ */
+function applyUpstreamCredential(
+    credential: UpstreamCredential,
+    headers: Record<string, string>,
+    queryParams: Record<string, any>
+): void {
+    if (credential.location === 'query') {
+        queryParams[credential.name] = credential.value;
+    } else if (credential.location === 'cookie') {
+        // Add the cookie, preserving other cookies if they exist
+        headers['cookie'] = \`\${credential.name}=\${credential.value}\${headers['cookie'] ? \`; \${headers['cookie']}\` : ''}\`;
+    } else {
+        headers[credential.name] = credential.value;
+    }
+}
+
+/**
+ * Human-readable security requirements, e.g. "[apiKey AND oauth (scopes: read)] OR [bearer]".
+ */
+function describeSecurityRequirements(requirements: Record<string, string[]>[]): string {
+    return requirements
+        .map((requirement) => {
+            const parts = Object.entries(requirement ?? {}).map(([name, scopes]) =>
+                Array.isArray(scopes) && scopes.length > 0 ? \`\${name} (scopes: \${scopes.join(', ')})\` : name
+            );
+            return \`[\${parts.length > 0 ? parts.join(' AND ') : 'no auth'}]\`;
+        })
+        .join(' OR ');
+}
+
+/**
+ * Resolves an operation's OpenAPI security requirements (issue #81).
+ *
+ * Requirement objects are alternatives tried in order (OR); every scheme inside one
+ * object must resolve (AND). A partially satisfied alternative is never applied, so
+ * an incomplete set of credentials is never sent. An empty object ({}) makes
+ * authentication optional: it is used only when no other alternative is complete.
+ * A forwarded passthrough header (--header-passthrough) satisfies the scheme whose
+ * credential travels in it, so a client that sends its own API key still gets the
+ * other schemes of an AND requirement.
+ */
+async function resolveSecurityRequirements(
+    requirements: Record<string, string[]>[] | undefined,
+    allSecuritySchemes: Record<string, any>,
+    forwarded: Record<string, string> = {}
+): Promise<SecurityResolution> {
+    if (!Array.isArray(requirements) || requirements.length === 0) return { status: 'none' };
+    let optional = false;
+    for (const requirement of requirements) {
+        const entries = Object.entries(requirement ?? {});
+        if (entries.length === 0) {
+            optional = true;
+            continue;
+        }
+        const credentials: UpstreamCredential[] = [];
+        let complete = true;
+        for (const [schemeName, scopes] of entries) {
+            const headerName = credentialHeaderName(allSecuritySchemes[schemeName]);
+            const credential: UpstreamCredential | null =
+                headerName !== undefined && forwarded[headerName] !== undefined
+                    ? {
+                          schemeName,
+                          location: 'header',
+                          name: headerName,
+                          value: forwarded[headerName],
+                          description: \`forwarded client header '\${headerName}' for '\${schemeName}'\`,
+                      }
+                    : await resolveSchemeCredential(
+                          schemeName,
+                          allSecuritySchemes[schemeName],
+                          Array.isArray(scopes) ? scopes : []
+                      );
+            if (!credential) {
+                complete = false;
+                break;
+            }
+            credentials.push(credential);
+        }
+        if (!complete) continue;
+        if (hasConflictingCredentials(credentials)) {
+            console.error(\`Skipping security requirement \${describeSecurityRequirements([requirement])}: two of its schemes need the same request location.\`);
+            continue;
+        }
+        return { status: 'applied', credentials };
+    }
+    return optional
+        ? { status: 'optional' }
+        : { status: 'unsatisfied', summary: describeSecurityRequirements(requirements) };
+}
+`;
+
   // Generate complete execute API tool function
   return `
-${insecurePreamble}${oauth2TokenAcquisitionCode}
+${insecurePreamble}${oauth2TokenAcquisitionCode}${securityResolutionHelpers}
 
 /**
  * Executes an API tool with the provided arguments
@@ -535,10 +657,10 @@ async function executeApiTool(
     } catch (error: unknown) {
         if (error instanceof ZodError) {
             const validationErrorMessage = \`Invalid arguments for tool '\${toolName}': \${error.errors.map(e => \`\${e.path.join('.')} (\${e.code}): \${e.message}\`).join(', ')}\`;
-            return { content: [{ type: 'text', text: validationErrorMessage }] };
+            return { isError: true, content: [{ type: 'text', text: validationErrorMessage }] };
         } else {
              const errorMessage = error instanceof Error ? error.message : String(error);
-             return { content: [{ type: 'text', text: \`Internal error during validation setup: \${errorMessage}\` }] };
+             return { isError: true, content: [{ type: 'text', text: \`Internal error during validation setup: \${errorMessage}\` }] };
         }
     }
 
@@ -577,7 +699,7 @@ async function executeApiTool(
         requestBodyData = validatedArgs['requestBody'];
         headers['content-type'] = definition.requestBodyContentType;
     }
-${customAuthCall}${builtinAuthGuardOpen}${securityCode}${builtinAuthGuardClose}
+${forwardedHeadersCode}${customAuthCall}${builtinAuthGuardOpen}${securityCode}${builtinAuthGuardClose}
 ${headerPassthroughCode}
     // Prepare the axios request configuration
     const config: AxiosRequestConfig = {
@@ -659,8 +781,8 @@ ${headerPassthroughCode}
     // Log error to stderr
     console.error(\`Error during execution of tool '\${toolName}':\`, errorMessage);
     
-    // Return error message to client
-    return { content: [{ type: "text", text: errorMessage }] };
+    // Return the error to the client as a tool error so the model knows the call failed
+    return { isError: true, content: [{ type: "text", text: errorMessage }] };
   }
 }
 `;

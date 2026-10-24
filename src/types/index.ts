@@ -12,6 +12,14 @@ import type { JSONSchema7 } from 'json-schema';
 export type TransportType = 'stdio' | 'web' | 'streamable-http' | 'cloudflare-worker';
 
 /**
+ * Inbound authentication for generated HTTP servers (issue #80).
+ * - 'none' (default): the MCP endpoint is public.
+ * - 'bearer': clients must send `Authorization: Bearer <token>`; accepted tokens are
+ *   read at runtime from MCP_AUTH_TOKENS (comma-separated) or MCP_AUTH_TOKEN.
+ */
+export type InboundAuthMode = 'none' | 'bearer';
+
+/**
  * CLI options for the generator
  */
 export interface CliOptions {
@@ -71,6 +79,11 @@ export interface CliOptions {
    * Basic Authorization header. Default false.
    */
   oauthCredsInBody?: boolean;
+  /**
+   * Inbound authentication for HTTP transports (web, streamable-http,
+   * cloudflare-worker). Has no effect on stdio. Default 'none'.
+   */
+  inboundAuth?: InboundAuthMode;
 }
 
 /**
