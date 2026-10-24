@@ -30,6 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Exclusive bound messages.** A value equal to an `exclusiveMinimum` or `exclusiveMaximum` is
   reported as `must be greater than N` or `must be less than N` instead of, for example,
   `1 is less than 1`.
+- **Query parameters follow their OpenAPI `style` and `explode`.** Array values were always
+  sent comma-joined (`tag=red%2Cblue`). They now repeat the key by default
+  (`tag=red&tag=blue`), as OpenAPI specifies for query parameters (style `form`, `explode`
+  true), and are joined by commas, spaces or pipes for `form`, `spaceDelimited` and
+  `pipeDelimited` with `explode: false`. `deepObject` objects are sent as `name[key]=value`.
+  This changes requests for specs that omit `explode` on an array parameter whose API expects
+  comma-separated values: declare `explode: false` on that parameter, which is OpenAPI's way to
+  request `ids=1,2`, and regenerate.
+- **Cookie parameters are sent.** Parameters with `in: cookie` were listed in the tool input
+  but never sent. They now go in the `Cookie` header as percent-encoded `name=value` pairs,
+  alongside an API key cookie credential when the operation uses one.
 - The generated `.env.example` leaves `API_BASE_URL` commented out, so it no longer overrides
   the spec's server URL with a placeholder (#91).
 - Generated OAuth2 docs list the variables each flow uses: `OAUTH_TOKEN_<SCHEME>` for every
