@@ -217,6 +217,14 @@ describe('playground client: hostile or broken responses', () => {
     expect(parser.push('data: ok\n\n')).toEqual([{ event: 'message', data: 'ok' }]);
   });
 
+  it('rejects a complete SSE event larger than 1 MiB before parsing it', () => {
+    const parser = new SseParser();
+    expect(() => parser.push('data: ' + 'x'.repeat(MAX_SSE_BUFFER + 1) + '\n\n')).toThrow(
+      /larger than 1 MiB/
+    );
+    expect(parser.push('data: ok\n\n')).toEqual([{ event: 'message', data: 'ok' }]);
+  });
+
   it('explains a successful response that is not JSON', async () => {
     const client = new McpClient({
       url: 'http://127.0.0.1:1/mcp',

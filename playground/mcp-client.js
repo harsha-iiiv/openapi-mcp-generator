@@ -47,6 +47,11 @@ export class SseParser {
     const events = [];
     let boundary;
     while ((boundary = this.buffer.indexOf('\n\n')) !== -1) {
+      // Check complete events too, before slicing or parsing them.
+      if (boundary > MAX_SSE_BUFFER) {
+        this.buffer = '';
+        throw new Error('The server sent an SSE event larger than 1 MiB.');
+      }
       const block = this.buffer.slice(0, boundary);
       this.buffer = this.buffer.slice(boundary + 2);
       const event = parseEventBlock(block);
