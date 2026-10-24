@@ -1020,6 +1020,16 @@ describe('opt-in security/execution options', () => {
     expect(generateExecuteApiToolFunction(undefined, {})).not.toContain('inboundHeaderStore');
   });
 
+  it('#82 names passthrough headers in missing-credential hints only on HTTP transports', () => {
+    const names = { headerPassthrough: ['X-API-Key'] };
+    expect(generateExecuteApiToolFunction({}, { ...names, transport: 'stdio' })).toContain(
+      'allSecuritySchemes, []);'
+    );
+    expect(
+      generateExecuteApiToolFunction({}, { ...names, transport: 'streamable-http' })
+    ).toContain('allSecuritySchemes, ["x-api-key"]);');
+  });
+
   it('#55 emits the AsyncLocalStorage import + store declaration when enabled', () => {
     const opts = { headerPassthrough: ['X-API-KEY'] };
     expect(getSecurityModuleImports(opts)).toContain("from 'async_hooks'");

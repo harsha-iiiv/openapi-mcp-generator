@@ -90,6 +90,8 @@ export interface SecurityCodeOptions {
   headerPassthrough?: string[];
   /** Generate and invoke a custom auth hook before built-in auth (issue #9). */
   customAuth?: boolean;
+  /** Target transport; header passthrough only works on the HTTP transports. */
+  transport?: string;
 }
 
 /**
@@ -368,6 +370,13 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
 `
       : '';
 
+  // Headers a client can send instead of a configured credential (HTTP transports only;
+  // stdio has no inbound headers).
+  const passthroughHintNames =
+    options.transport === 'web' || options.transport === 'streamable-http'
+      ? headerPassthroughNames.map((h) => h.toLowerCase())
+      : [];
+
   // Upstream auth (issue #81): OpenAPI Security Requirement semantics. Every
   // requirement object is an alternative (OR); every scheme inside one object must
   // be satisfied together (AND). Credentials are resolved for a whole alternative
@@ -387,7 +396,7 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
         if (String(process.env.MCP_ALLOW_MISSING_CREDENTIALS ?? '').toLowerCase() === 'true') {
             console.warn(\`Tool '\${toolName}' requires security: \${securityResolution.summary}, but no complete set of credentials is configured. Sending the request without upstream credentials (MCP_ALLOW_MISSING_CREDENTIALS=true).\`);
         } else {
-            const message = describeMissingCredentials(toolName, definition.securityRequirements, allSecuritySchemes, ${JSON.stringify(headerPassthroughNames.map((h) => h.toLowerCase()))});
+            const message = describeMissingCredentials(toolName, definition.securityRequirements, allSecuritySchemes, ${JSON.stringify(passthroughHintNames)});
             console.error(message);
             return { isError: true, content: [{ type: 'text', text: message }] };
         }

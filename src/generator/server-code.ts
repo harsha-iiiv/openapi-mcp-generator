@@ -59,6 +59,7 @@ export function generateMcpServerCode(
     oauthCredsInBody: options.oauthCredsInBody,
     headerPassthrough: options.headerPassthrough,
     customAuth: options.customAuth,
+    transport: options.transport,
   };
 
   // Generate code for tool definition map
