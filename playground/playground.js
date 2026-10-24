@@ -521,11 +521,17 @@ function renderOAuthStatus() {
 
 /** Runs the OAuth sign-in. Must be called from a click so the popup is allowed. */
 async function signIn(challenge) {
-  const url = endpointUrl();
-  if (!/^https:\/\//i.test(url) && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(url)) {
+  // Check what was typed: an empty field would resolve to this page's own /mcp.
+  const typed = hosted() ? $('url').value.trim() : endpointUrl();
+  if (
+    !/^https:\/\//i.test(typed) &&
+    !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(typed)
+  ) {
     showConnectError(new Error('Enter the server URL first (https://…).'));
     return false;
   }
+  $('connect-error').hidden = true;
+  const url = endpointUrl();
   const popup = (state.oauthModule?.openBlankPopup || openBlank)();
   setAuthMode('oauth');
   $('btn-signin').disabled = true;
