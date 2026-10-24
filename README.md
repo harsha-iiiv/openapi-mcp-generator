@@ -191,8 +191,9 @@ interface McpToolDefinition {
 `inputSchema` keeps `integer` types, turns `example` into `examples` and leaves out `readOnly`
 properties. Annotations come from the HTTP method (GET and HEAD are read-only, DELETE is
 destructive, PUT and DELETE are idempotent) and can be overridden per operation with
-`x-mcp-annotations`. Each returned tool also carries `baseUrl`, the resolved base URL or an empty
-string.
+`x-mcp-annotations`. At runtime, each returned tool also carries `baseUrl`, the resolved base URL or an
+empty string. `McpToolDefinition` does not declare it yet, so TypeScript code needs a cast to
+read it.
 
 More filters:
 
