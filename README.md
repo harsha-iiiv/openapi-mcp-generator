@@ -119,7 +119,7 @@ The generated project includes:
 
 Core dependencies:
 
-- `@modelcontextprotocol/sdk` - MCP protocol implementation
+- `@modelcontextprotocol/server` - MCP protocol implementation (SDK v2)
 - `axios` - HTTP client for API requests
 - `zod` - Runtime validation
 - `json-schema-to-zod` - Convert JSON Schema to Zod
@@ -152,8 +152,10 @@ Launches a fully functional HTTP server with:
 
 Implements the MCP StreamableHTTP transport which offers:
 
-- Stateful JSON-RPC over HTTP POST requests
-- Session management using HTTP headers
+- Stateless JSON-RPC over HTTP: every request gets a fresh server, so it scales behind any load
+  balancer
+- Serves MCP 2026-07-28 and 2025-era clients (2025-era clients run without sessions; GET and
+  DELETE answer `405`)
 - Proper HTTP response status codes
 - Built-in error handling
 - Compatibility with MCP StreamableHTTPClientTransport
@@ -162,7 +164,7 @@ Implements the MCP StreamableHTTP transport which offers:
 
 ### Cloudflare Worker
 
-Generates a complete, deployable [Cloudflare Workers](https://developers.cloudflare.com/workers/) project that serves the MCP server over **Streamable HTTP at `/mcp`** using the MCP SDK's `WebStandardStreamableHTTPServerTransport` directly (no extra framework dependency). Deploy it to your own Cloudflare account with one command:
+Generates a complete, deployable [Cloudflare Workers](https://developers.cloudflare.com/workers/) project that serves the MCP server over **Streamable HTTP at `/mcp`** using `createMcpHandler` from `@modelcontextprotocol/server` (no extra framework dependency). Deploy it to your own Cloudflare account with one command:
 
 ```bash
 openapi-mcp-generator --input ./openapi.json --output ./my-mcp-worker --transport cloudflare-worker
@@ -174,8 +176,8 @@ npx wrangler deploy               # Wrangler logs into YOUR Cloudflare account a
 
 Highlights:
 
-- Stateless, runs on the free Workers tier (no Durable Objects or KV). A fresh MCP server + transport is created per request (required by MCP SDK ≥ 1.26).
-- Lean dependencies: just `@modelcontextprotocol/sdk` and `zod` — no extra agent framework.
+- Stateless, runs on the free Workers tier (no Durable Objects or KV). A fresh MCP server is created per request.
+- Lean dependencies: just `@modelcontextprotocol/server` and `zod` — no extra agent framework.
 - Non-secret config (e.g. `API_BASE_URL`) lives in `wrangler.jsonc` under `vars`; secrets are set with `wrangler secret put` and read from the `env` binding — never committed.
 - Workers-native runtime: global `fetch` (no Node `https`), and argument validation uses build-time-emitted zod (no runtime `eval`).
 - Auth is scheme-aware: API key (header/query/cookie), HTTP basic/bearer, OpenID Connect tokens, and OAuth2 client-credentials are derived from `env` secrets, following OpenAPI security requirement semantics (see [Securing HTTP servers](#-securing-http-servers)).
@@ -190,7 +192,7 @@ Local development: `cp .dev.vars.example .dev.vars`, fill in secrets, then `npm 
 | ------------------ | ------------------- | ----------------- | ------------------ | ----------------------- |
 | Protocol           | JSON-RPC over stdio | JSON-RPC over SSE | JSON-RPC over HTTP | Streamable HTTP at /mcp |
 | Connection         | Persistent          | Persistent        | Request/response   | Request/response        |
-| Bidirectional      | Yes                 | Yes               | Yes (stateful)     | Yes                     |
+| Bidirectional      | Yes                 | Yes               | Yes (stateless)    | Yes                     |
 | Multiple clients   | No                  | Yes               | Yes                | Yes                     |
 | Browser compatible | No                  | Yes               | Yes                | Yes                     |
 | Firewall friendly  | No                  | Yes               | Yes                | Yes                     |
@@ -241,8 +243,8 @@ openssl rand -hex 32   # put the value in .env as MCP_AUTH_TOKEN (Workers: wrang
 - Tokens are read at runtime, never written into generated files, and compared in constant time.
   Rotate without downtime with `MCP_AUTH_TOKENS=new-token,old-token`.
 - With no token configured the server fails closed with `503`.
-- Streamable HTTP and SSE sessions are bound to the token that opened them; replaying a session
-  ID with another token is answered `404`.
+- SSE sessions are bound to the token that opened them; replaying a session ID with another
+  token is answered `404`. Streamable HTTP is stateless and checks the token on every request.
 - Clients that accept custom headers (Claude Code, Cursor, VS Code, MCP Inspector, `mcp-remote`)
   send the token directly. Claude.ai and ChatGPT connectors use OAuth or no auth; put those
   behind an OAuth-capable gateway.
