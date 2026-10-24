@@ -3,6 +3,7 @@
  * Run with: npm test
  */
 import { describe, it, expect } from 'vitest';
+import { resolveServerUrl } from '../src/utils/url.js';
 import { fileURLToPath } from 'node:url';
 import { OpenAPIV3 } from 'openapi-types';
 
@@ -1417,5 +1418,22 @@ describe('generated package.json', () => {
       expect(deps).not.toHaveProperty('zod');
       expect(deps).not.toHaveProperty('json-schema-to-zod');
     }
+  });
+});
+
+describe('resolveServerUrl', () => {
+  it('substitutes server variables with their defaults', () => {
+    expect(
+      resolveServerUrl({
+        url: 'https://{region}.example.com/{version}',
+        variables: { region: { default: 'eu' }, version: { default: 'v2' } },
+      })
+    ).toBe('https://eu.example.com/v2');
+  });
+
+  it('stays fast on a long run of unmatched braces', () => {
+    const started = Date.now();
+    resolveServerUrl({ url: 'https://x/' + '{'.repeat(50_000) });
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });

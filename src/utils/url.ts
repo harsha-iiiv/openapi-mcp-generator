@@ -42,7 +42,8 @@ export function determineBaseUrl(api: OpenAPIV3.Document, cmdLineBaseUrl?: strin
  */
 export function resolveServerUrl(server: OpenAPIV3.ServerObject): string {
   const variables = server.variables ?? {};
-  return server.url.replace(/\{([^}]+)\}/g, (match, name: string) => {
+  // [^{}] keeps the match linear: a run of '{' without '}' cannot cause backtracking.
+  return server.url.replace(/\{([^{}]+)\}/g, (match, name: string) => {
     const variable = variables[name];
     if (variable && variable.default !== undefined) return String(variable.default);
     console.warn(`Server URL "${server.url}" uses undefined variable {${name}}; leaving it as is.`);
