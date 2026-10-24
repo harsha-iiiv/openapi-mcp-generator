@@ -35,12 +35,11 @@ export function generatePackageJson(
       '@modelcontextprotocol/server': '^2.4.0',
       // JSON Schema 2020-12 validation of tool arguments (no code generation or eval).
       '@cfworker/json-schema': '^4.1.1',
-      axios: '^1.9.0',
-      dotenv: '^16.4.5',
+      axios: '^1.20.0',
     },
     devDependencies: {
       '@types/node': '^22.17.2',
-      typescript: '^5.8.3',
+      typescript: '^6.0.3',
       shx: '^0.4.0',
     },
   };
@@ -49,14 +48,8 @@ export function generatePackageJson(
   if (includeWebDeps) {
     packageData.dependencies = {
       ...packageData.dependencies,
-      hono: '^4.7.7',
-      '@hono/node-server': '^1.14.1',
-      uuid: '^11.1.0',
-    };
-
-    packageData.devDependencies = {
-      ...packageData.devDependencies,
-      '@types/uuid': '^10.0.0',
+      hono: '^4.13.13',
+      '@hono/node-server': '^2.1.5',
     };
 
     // Add appropriate start script based on transport type

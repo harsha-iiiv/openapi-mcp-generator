@@ -126,6 +126,8 @@ describe('integration: generate + typecheck', () => {
     const out = path.join(workdir, 'web-passthrough');
     generate(out, ['--transport', 'web', '--header-passthrough', 'X-API-Key']);
     const webTs = fs.readFileSync(path.join(out, 'src', 'web-server.ts'), 'utf8');
+    expect(webTs).toContain("import { randomUUID } from 'node:crypto'");
+    expect(webTs).not.toContain('uuid');
     expect(webTs).toContain("import { inboundHeaderStore } from './index.js'");
     expect(webTs).toContain('inboundHeaderStore.run(');
     expect(webTs).not.toContain('__mcpInboundHeaders');

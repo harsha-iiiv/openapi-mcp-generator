@@ -4,7 +4,7 @@
  * Emitted into the web (SSE) and streamable-http transports when the generator
  * runs with `--inbound-auth bearer`. The token is never written into generated
  * files: it is read at runtime from MCP_AUTH_TOKENS (comma-separated, for
- * rotation) or MCP_AUTH_TOKEN, after dotenv has loaded `.env`.
+ * rotation) or MCP_AUTH_TOKEN, after `.env` has been loaded.
  */
 import { InboundAuthMode } from '../types/index.js';
 

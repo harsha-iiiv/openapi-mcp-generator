@@ -399,3 +399,72 @@ describe('argument validation with JSON Schema (no eval)', () => {
     }
   });
 });
+
+// --- lean generated Node projects --------------------------------------------------
+
+describe('lean generated Node projects', () => {
+  let nodeDir: string;
+
+  beforeAll(() => {
+    const specPath = writeSpec(workdir, {
+      ...featureSpec(upstream.url),
+      info: { title: 'Lean', version: '1.0.0' },
+    });
+    nodeDir = path.join(workdir, 'lean-node');
+    // Bake an unreachable base URL so the test can tell where API_BASE_URL came from.
+    generate(specPath, nodeDir, ['--base-url', 'http://127.0.0.1:9']);
+    execFileSync('node', [tscEntry, '-p', path.join(nodeDir, 'tsconfig.json')], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    fs.writeFileSync(path.join(nodeDir, '.env'), `API_BASE_URL=${upstream.url}\n`);
+  }, 60_000);
+
+  const connect = async (env: Record<string, string>) => {
+    const client = new Client({ name: 'lean-test', version: '1.0.0' });
+    await client.connect(
+      new StdioClientTransport({
+        command: 'node',
+        args: [path.join(nodeDir, 'build', 'index.js')],
+        cwd: nodeDir,
+        stderr: 'pipe',
+        env: { ...getDefaultEnvironment(), ...env },
+      })
+    );
+    return client;
+  };
+
+  it('loads .env with the built-in loader, without overriding the environment', async () => {
+    const fromFile = await connect({});
+    const ok = (await fromFile.callTool({ name: 'getPet', arguments: { petId: 3 } })) as CallResult;
+    expect(ok.isError ?? false).toBe(false);
+    expect(upstream.requests.at(-1)?.path).toBe('/pets/3');
+    await fromFile.close();
+
+    const fromEnv = await connect({ API_BASE_URL: 'http://127.0.0.1:9' });
+    const refused = (await fromEnv.callTool({
+      name: 'getPet',
+      arguments: { petId: 4 },
+    })) as CallResult;
+    expect(refused.isError).toBe(true);
+    await fromEnv.close();
+  }, 60_000);
+
+  it('ships no dotenv, uuid, ESLint or Jest leftovers', () => {
+    expect(fs.existsSync(path.join(nodeDir, '.eslintrc.json'))).toBe(false);
+    expect(fs.existsSync(path.join(nodeDir, 'jest.config.js'))).toBe(false);
+    const pkg = JSON.parse(fs.readFileSync(path.join(nodeDir, 'package.json'), 'utf8'));
+    for (const dep of ['dotenv', 'uuid', '@types/uuid', 'zod', 'json-schema-to-zod']) {
+      expect(pkg.dependencies[dep] ?? pkg.devDependencies[dep], dep).toBeUndefined();
+    }
+    const tsconfig = JSON.parse(fs.readFileSync(path.join(nodeDir, 'tsconfig.json'), 'utf8'));
+    // Both are required by TypeScript 6 (which compiled this project above).
+    expect(tsconfig.compilerOptions.types).toEqual(['node']);
+    expect(tsconfig.compilerOptions.rootDir).toBe('./src');
+    expect(pkg.devDependencies.typescript).toBe('^6.0.3');
+    const index = fs.readFileSync(path.join(nodeDir, 'src', 'index.ts'), 'utf8');
+    expect(index).toContain("if (existsSync('.env')) process.loadEnvFile('.env');");
+    expect(index).not.toMatch(/from ['"]dotenv['"]/);
+  });
+});

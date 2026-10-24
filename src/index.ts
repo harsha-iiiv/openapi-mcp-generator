@@ -16,8 +16,6 @@ import {
   generatePackageJson,
   generateTsconfigJson,
   generateGitignore,
-  generateEslintConfig,
-  generateJestConfig,
   generatePrettierConfig,
   generateEnvExample,
   generateOAuth2Docs,
@@ -235,9 +233,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
   const packageJsonPath = path.join(outputDir, 'package.json');
   const tsconfigPath = path.join(outputDir, 'tsconfig.json');
   const gitignorePath = path.join(outputDir, '.gitignore');
-  const eslintPath = path.join(outputDir, '.eslintrc.json');
   const prettierPath = path.join(outputDir, '.prettierrc');
-  const jestConfigPath = path.join(outputDir, 'jest.config.js');
   const envExamplePath = path.join(outputDir, '.env.example');
   const docsDir = path.join(outputDir, 'docs');
   const oauth2DocsPath = path.join(docsDir, 'oauth2-configuration.md');
@@ -398,14 +394,8 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     console.error('Generating .gitignore...');
     const gitignoreContent = generateGitignore();
 
-    console.error('Generating ESLint config...');
-    const eslintConfigContent = generateEslintConfig();
-
     console.error('Generating Prettier config...');
     const prettierConfigContent = generatePrettierConfig();
-
-    console.error('Generating Jest config...');
-    const jestConfigContent = generateJestConfig();
 
     console.error('Generating .env.example file...');
     const envExampleContent = generateEnvExample(api.components?.securitySchemes, {
@@ -446,14 +436,8 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     await fs.writeFile(gitignorePath, gitignoreContent);
     console.error(` -> Created ${gitignorePath}`);
 
-    await fs.writeFile(eslintPath, eslintConfigContent);
-    console.error(` -> Created ${eslintPath}`);
-
     await fs.writeFile(prettierPath, prettierConfigContent);
     console.error(` -> Created ${prettierPath}`);
-
-    await fs.writeFile(jestConfigPath, jestConfigContent);
-    console.error(` -> Created ${jestConfigPath}`);
 
     await fs.writeFile(envExamplePath, envExampleContent);
     console.error(` -> Created ${envExamplePath}`);

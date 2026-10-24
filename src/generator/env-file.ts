@@ -96,35 +96,3 @@ MCP_PLAYGROUND=
 
   return content;
 }
-
-/**
- * Generates dotenv configuration code for the MCP server
- *
- * @returns Code for loading environment variables
- */
-export function generateDotenvConfig(): string {
-  return `
-/**
- * Load environment variables from .env file
- */
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Load environment variables from .env file
-const result = dotenv.config({ path: path.resolve(__dirname, '../.env') });
-
-if (result.error) {
-  console.warn('Warning: No .env file found or error loading .env file.');
-  console.warn('Using default environment variables.');
-}
-
-export const config = {
-  port: process.env.PORT || '3000',
-  logLevel: process.env.LOG_LEVEL || 'info',
-};
-`;
-}

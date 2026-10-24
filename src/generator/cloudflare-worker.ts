@@ -880,7 +880,7 @@ export function generateWorkerPackageJson(input: CloudflareWorkerGenInput): stri
       // wrangler 4.15x declares an optional peer on workers-types v5; a v4 pin makes
       // a fresh \`npm install\` fail with ERESOLVE.
       '@cloudflare/workers-types': '^5.20261019.1',
-      typescript: '^5.8.3',
+      typescript: '^6.0.3',
       wrangler: '^4.0.0',
     },
   };

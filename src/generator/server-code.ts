@@ -149,9 +149,12 @@ main().catch((error) => {
  * Generated on: ${new Date().toISOString()}
  */
 
-// Load environment variables from .env file
-import dotenv from 'dotenv';
-dotenv.config();
+import { existsSync } from 'node:fs';
+
+// Load environment variables from .env in the working directory, when present.
+// Node's built-in loader never overrides variables that are already set and,
+// unlike dotenv 17+, never writes to stdout (which would corrupt stdio servers).
+if (existsSync('.env')) process.loadEnvFile('.env');
 
 import { Server, ProtocolError, ProtocolErrorCode, type Tool, type CallToolResult, type CallToolRequest } from "@modelcontextprotocol/server";${stdioImport}${transportImport}
 
