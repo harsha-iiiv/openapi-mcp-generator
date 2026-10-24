@@ -1324,8 +1324,9 @@ describe('cloudflare-worker target', () => {
       serverName: 'petstore-mcp',
       serverVersion: '1.0.0',
       securitySchemes: {
-        oauth: { type: 'oauth2', flows: {} },
-      } as OpenAPIV3.ComponentsObject['securitySchemes'],
+        // A client credentials flow without its (required) tokenUrl.
+        oauth: { type: 'oauth2', flows: { clientCredentials: { scopes: {} } } },
+      } as unknown as OpenAPIV3.ComponentsObject['securitySchemes'],
       baseUrl: 'https://petstore.example.com',
     });
     const devVars = fileContent(files, '.dev.vars.example');

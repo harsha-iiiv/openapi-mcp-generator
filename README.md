@@ -348,7 +348,9 @@ credentials instead. OAuth2 tokens are requested with the operation's scopes unl
 `OAUTH_SCOPES_<SCHEME_NAME>` overrides them. The Cloudflare Worker target reads the same
 credentials from Wrangler secrets named `<SCHEME_NAME>_API_KEY`, `<SCHEME_NAME>_TOKEN`,
 `<SCHEME_NAME>_USERNAME`/`_PASSWORD` and `<SCHEME_NAME>_CLIENT_ID`/`_CLIENT_SECRET` (see the
-generated `.dev.vars.example`).
+generated `.dev.vars.example`). For OAuth2, `<SCHEME_NAME>_TOKEN` holds a token you already have
+and works for every flow; the Worker fetches a token from the client ID and secret only when the
+scheme declares a client credentials flow.
 
 ---
 

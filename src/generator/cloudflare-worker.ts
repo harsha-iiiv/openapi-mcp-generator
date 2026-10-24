@@ -135,6 +135,8 @@ interface RuntimeSecurityScheme {
   name?: string;
   scheme?: string;
   tokenUrl?: string | null;
+  /** OAuth2 only: the scheme declares a client credentials flow the Worker can fetch tokens with. */
+  clientCredentials?: boolean;
 }
 
 /**
@@ -158,8 +160,11 @@ function buildRuntimeSecuritySchemes(
       // that write "Basic"/"Bearer".
       map[name] = { type: 'http', scheme: scheme.scheme?.toLowerCase() };
     } else if (scheme.type === 'oauth2') {
+      // Only a client credentials flow lets the Worker fetch a token itself; every
+      // other flow needs a token you already have (<SCHEME>_TOKEN).
+      const clientCredentials = Boolean(scheme.flows?.clientCredentials);
       const tokenUrl = scheme.flows?.clientCredentials?.tokenUrl ?? null;
-      map[name] = { type: 'oauth2', tokenUrl };
+      map[name] = { type: 'oauth2', tokenUrl, clientCredentials };
     } else {
       // openIdConnect (bearer token from <SCHEME>_TOKEN) or any other type.
       map[name] = { type: scheme.type };
@@ -580,7 +585,14 @@ export function generateWorkerUpstreamAuth(input: CloudflareWorkerGenInput): str
 /** Runtime metadata for the spec's security schemes (embedded at generate time). */
 export const SECURITY_SCHEMES: Record<
   string,
-  { type: string; in?: string; name?: string; scheme?: string; tokenUrl?: string | null }
+  {
+    type: string;
+    in?: string;
+    name?: string;
+    scheme?: string;
+    tokenUrl?: string | null;
+    clientCredentials?: boolean;
+  }
 > = ${securitySchemesJson};
 
 /** Worker environment: vars from wrangler.jsonc plus secrets set with \`wrangler secret put\`. */
@@ -691,6 +703,14 @@ async function resolveCredential(
   }
 
   if (scheme.type === 'oauth2') {
+    // A token you already have wins (<SCHEME>_TOKEN, as for bearer and OpenID Connect).
+    const preAcquired = env[\`\${upper}_TOKEN\`];
+    if (preAcquired) {
+      return { location: 'header', name: 'authorization', value: \`Bearer \${preAcquired}\` };
+    }
+    // Only a client credentials flow can fetch a token; implicit, authorization code
+    // and password flows need a token obtained elsewhere.
+    if (!scheme.clientCredentials) return null;
     const token = await fetchClientCredentialsToken(schemeName, scheme.tokenUrl, scopes, env);
     if (!token) return null;
     return { location: 'header', name: 'authorization', value: \`Bearer \${token}\` };
@@ -764,7 +784,9 @@ function credentialHint(schemeName: string, passthroughNames: string[]): string 
   else if (scheme.type === 'http' && scheme.scheme === 'basic') hint = \`\${upper}_USERNAME (and \${upper}_PASSWORD)\`;
   else if (scheme.type === 'http' || scheme.type === 'openIdConnect') hint = \`\${upper}_TOKEN\`;
   else if (scheme.type === 'oauth2') {
-    hint = \`\${upper}_CLIENT_ID and \${upper}_CLIENT_SECRET\${scheme.tokenUrl ? '' : \` and \${upper}_TOKEN_URL\`}\`;
+    hint = scheme.clientCredentials
+      ? \`\${upper}_TOKEN (or \${upper}_CLIENT_ID and \${upper}_CLIENT_SECRET\${scheme.tokenUrl ? '' : \` and \${upper}_TOKEN_URL\`})\`
+      : \`\${upper}_TOKEN\`;
   } else return \`(security scheme '\${schemeName}' of type \${scheme.type} is not supported)\`;
   const header = credentialHeaderName(schemeName);
   return header !== undefined && passthroughNames.includes(header)
@@ -885,10 +907,22 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
       } else if (scheme && 'type' in scheme && scheme.type === 'http') {
         lines.push(`${upper}_TOKEN="..."`);
       } else if (scheme && 'type' in scheme && scheme.type === 'oauth2') {
-        lines.push(`${upper}_CLIENT_ID="..."`, `${upper}_CLIENT_SECRET="..."`);
-        const tokenUrl = scheme.flows?.clientCredentials?.tokenUrl;
-        if (!tokenUrl) {
-          lines.push(`${upper}_TOKEN_URL="..."`);
+        const clientCredentials = scheme.flows?.clientCredentials;
+        if (clientCredentials) {
+          lines.push(
+            `# OAuth2 '${name}': a token you already have, or the client ID and secret to fetch one`,
+            `${upper}_TOKEN="..."`,
+            `${upper}_CLIENT_ID="..."`,
+            `${upper}_CLIENT_SECRET="..."`
+          );
+          if (!clientCredentials.tokenUrl) {
+            lines.push(`${upper}_TOKEN_URL="..."`);
+          }
+        } else {
+          lines.push(
+            `# OAuth2 '${name}': an access token you already obtained (this flow cannot be fetched by the Worker)`,
+            `${upper}_TOKEN="..."`
+          );
         }
       } else if (scheme && 'type' in scheme && scheme.type === 'openIdConnect') {
         lines.push(`${upper}_TOKEN="..."`);
@@ -981,17 +1015,23 @@ export function generateWorkerReadme(input: CloudflareWorkerGenInput): string {
             // Emit the secret name(s) that match this scheme's type so the deploy
             // hint stays in sync with .dev.vars.example.
             if (scheme && 'type' in scheme && scheme.type === 'oauth2') {
-              const hasTokenUrl = Boolean(
-                (scheme as OpenAPIV3.OAuth2SecurityScheme).flows?.clientCredentials?.tokenUrl
-              );
+              const clientCredentials = (scheme as OpenAPIV3.OAuth2SecurityScheme).flows
+                ?.clientCredentials;
+              // Without a client credentials flow the Worker cannot fetch a token.
+              if (!clientCredentials) {
+                return `   npx wrangler secret put ${upper}_TOKEN   # OAuth2 access token you already obtained`;
+              }
               const oauthLines = [
                 `   npx wrangler secret put ${upper}_CLIENT_ID`,
                 `   npx wrangler secret put ${upper}_CLIENT_SECRET`,
               ];
               // When the spec omits the token URL, it must be supplied as a secret too.
-              if (!hasTokenUrl) {
+              if (!clientCredentials.tokenUrl) {
                 oauthLines.push(`   npx wrangler secret put ${upper}_TOKEN_URL`);
               }
+              oauthLines.push(
+                `   # or, with an OAuth2 token you already have: npx wrangler secret put ${upper}_TOKEN`
+              );
               return oauthLines.join('\n');
             }
             const httpScheme =
