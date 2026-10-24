@@ -1,0 +1,9 @@
+{
+  "client_id": "https://mcp.pidata.tech/playground/oauth-client.json",
+  "client_name": "MCP Playground",
+  "client_uri": "https://mcp.pidata.tech/playground/",
+  "redirect_uris": ["https://mcp.pidata.tech/playground/oauth-callback.html"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none"
+}
