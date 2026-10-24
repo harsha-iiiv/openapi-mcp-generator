@@ -24,6 +24,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Verified with the official v2 client pinned to 2026-07-28 on stdio, Streamable HTTP and the
   Worker, and with the v1 client for the 2025 era.
 
+### Upgrading from 4.x
+
+1. Commit or back up your generated project. Regenerating with `--force` overwrites generated
+   files, including any edits you made to them.
+2. Regenerate with the same flags as before:
+   `npx openapi-mcp-generator@5 --input ./openapi.json --output ./my-mcp --force`.
+3. Run `npm install` in the project. Node projects now depend on `@modelcontextprotocol/server`
+   `^2.4.0` instead of `@modelcontextprotocol/sdk`; Worker projects depend on
+   `@modelcontextprotocol/server` and `zod`.
+4. Move customized code to SDK v2: import from `@modelcontextprotocol/server` (stdio helpers
+   from `@modelcontextprotocol/server/stdio`) instead of `@modelcontextprotocol/sdk/...`.
+   `createServer()` returns the low-level v2 `Server`, and transports are wired with
+   `serveStdio` and `createMcpHandler`.
+5. Streamable HTTP and Worker servers are stateless: no `mcp-session-id`, `GET` and `DELETE` on
+   `/mcp` answer `405`, and `MCP_SESSION_IDLE_TIMEOUT` is ignored. Tool calls over `POST` work
+   as before; clients that kept a `GET` stream open for server notifications no longer get one.
+6. Unchanged from 4.2: upstream credential variables and Worker secret names,
+   `--inbound-auth`, `--header-passthrough` and `MCP_ALLOWED_ORIGINS`. stdio and 2025-era
+   clients that start with `initialize` keep working.
+7. Not ready to move? Pin the previous major: `npx openapi-mcp-generator@4 ...`.
+
 ### Added
 
 - `--inbound-auth bearer` (#80): HTTP transports (`web`, `streamable-http`,

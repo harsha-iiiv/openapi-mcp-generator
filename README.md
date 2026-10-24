@@ -34,6 +34,20 @@ npm install -g openapi-mcp-generator
 
 ---
 
+## ⬆️ Upgrading to 5.0
+
+5.0 generates servers on the MCP TypeScript SDK v2 and supports MCP 2026-07-28 alongside 2025-era clients. Generated projects change, so upgrade deliberately:
+
+1. Commit your generated project, then regenerate with the same flags: `npx openapi-mcp-generator@5 -i ./openapi.json -o ./my-mcp --force`. `--force` overwrites generated files, including your edits.
+2. Run `npm install`. `@modelcontextprotocol/sdk` is replaced by `@modelcontextprotocol/server` (`^2.4.0`).
+3. Update customized code to import from `@modelcontextprotocol/server` (stdio helpers from `@modelcontextprotocol/server/stdio`).
+4. Streamable HTTP and Worker servers are stateless: no `mcp-session-id`, and `GET` and `DELETE` on `/mcp` return `405`. Tool calls over `POST` are unaffected.
+5. Credential variables, Worker secret names, `--inbound-auth`, `--header-passthrough` and `MCP_ALLOWED_ORIGINS` are unchanged.
+
+Not ready yet? Stay on 4.x with `npx openapi-mcp-generator@4`. Full notes: [CHANGELOG.md](./CHANGELOG.md).
+
+---
+
 ## 🛠 Usage
 
 ```bash
