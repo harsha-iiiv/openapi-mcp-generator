@@ -5,9 +5,18 @@
 [![GitHub repository](https://img.shields.io/badge/GitHub-harsha--iiiv/openapi--mcp--generator-blue.svg)](https://github.com/harsha-iiiv/openapi-mcp-generator)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/harsha-iiiv/openapi-mcp-generator)
 
-Generate [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers from OpenAPI specifications.
+**openapi-mcp-generator is a free, MIT-licensed CLI and library that turns an OpenAPI 3.x
+specification into a ready-to-run [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
+server for stdio, SSE, Streamable HTTP or Cloudflare Workers.** You own the generated TypeScript
+code, and tool inputs are validated against JSON Schema before any request reaches your API.
 
-This CLI tool automates the generation of MCP-compatible servers that proxy requests to existing REST APIs—enabling AI agents and other MCP clients to seamlessly interact with your APIs using your choice of transport methods.
+**[Docs](https://mcp.pidata.tech/docs)** · **[Quickstart](https://mcp.pidata.tech/docs/quickstart)** ·
+**[Browser playground](https://mcp.pidata.tech/playground/)** ·
+[Changelog](https://mcp.pidata.tech/docs/changelog)
+
+```bash
+npx openapi-mcp-generator --input ./openapi.json --output ./my-mcp
+```
 
 ---
 
@@ -19,7 +28,7 @@ This CLI tool automates the generation of MCP-compatible servers that proxy requ
 - 🧪 **JSON Schema Validation**: Arguments are validated against each tool's JSON Schema 2020-12 input schema (no code generation, no `eval`).
 - 🏷️ **Annotations and Structured Output**: Tools carry titles and read-only/destructive/idempotent hints, and JSON object responses come back as `structuredContent` (optionally with a declared `outputSchema`).
 - ⚙️ **Typed Server**: Fully typed, maintainable TypeScript code output.
-- 🔌 **Multiple Transports**: Communicate over stdio, SSE via Hono, or StreamableHTTP.
+- 🔌 **Multiple Transports**: Communicate over stdio, SSE via Hono, StreamableHTTP, or a deployable Cloudflare Worker.
 - 🧰 **Project Scaffold**: Generates a complete Node.js project with `tsconfig.json`, `package.json`, and entry point.
 - 🧪 **Built-in HTML Test Clients**: Test API interactions visually in your browser (for web-based transports).
 

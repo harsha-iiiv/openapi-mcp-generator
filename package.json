@@ -49,7 +49,7 @@
   "bugs": {
     "url": "https://github.com/harsha-iiiv/openapi-mcp-generator/issues"
   },
-  "homepage": "https://github.com/harsha-iiiv/openapi-mcp-generator#readme",
+  "homepage": "https://mcp.pidata.tech",
   "dependencies": {
     "@apidevtools/swagger-parser": "^13.1.0",
     "commander": "^15.0.0",
