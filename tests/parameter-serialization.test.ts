@@ -1,7 +1,7 @@
 /**
- * Query parameter serialization (OpenAPI style/explode) in generated servers. A
- * stdio Node server and an in-process Cloudflare Worker call a local upstream
- * that records the raw query string of every request.
+ * Query and cookie parameter serialization (OpenAPI style/explode) in generated
+ * servers. A stdio Node server and an in-process Cloudflare Worker call a local
+ * upstream that records the raw query string and Cookie header of every request.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -26,6 +26,7 @@ const tscEntry = path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc')
 interface Seen {
   path: string;
   rawQuery: string;
+  cookie?: string;
 }
 
 interface Upstream {
@@ -44,6 +45,7 @@ function startUpstream(): Promise<Upstream> {
       requests.push({
         path: q === -1 ? raw : raw.slice(0, q),
         rawQuery: q === -1 ? '' : raw.slice(q + 1),
+        cookie: req.headers.cookie,
       });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end('{"ok":true}');
@@ -68,6 +70,11 @@ function serializationSpec(upstream: string): OpenAPIV3.Document {
     openapi: '3.0.3',
     info: { title: 'Serialization', version: '1.0.0' },
     servers: [{ url: upstream }],
+    components: {
+      securitySchemes: {
+        cookieauth: { type: 'apiKey', in: 'cookie', name: 'api_token' },
+      },
+    },
     paths: {
       '/items': {
         get: {
@@ -98,7 +105,17 @@ function serializationSpec(upstream: string): OpenAPIV3.Document {
               explode: true,
               schema: { type: 'object', properties: { color: { type: 'string' } } },
             },
+            { name: 'session_id', in: 'cookie', schema: { type: 'string' } },
+            { name: 'prefs', in: 'cookie', explode: false, schema: stringArray },
           ],
+          responses: { '200': { description: 'ok' } },
+        },
+      },
+      '/secure': {
+        get: {
+          operationId: 'secureItems',
+          security: [{ cookieauth: [] }],
+          parameters: [{ name: 'session_id', in: 'cookie', schema: { type: 'string' } }],
           responses: { '200': { description: 'ok' } },
         },
       },
@@ -146,7 +163,7 @@ beforeAll(async () => {
       args: [path.join(nodeDir, 'build', 'index.js')],
       cwd: nodeDir,
       stderr: 'pipe',
-      env: getDefaultEnvironment(),
+      env: { ...getDefaultEnvironment(), API_KEY_COOKIEAUTH: 'key-123' },
     })
   );
   targets.push({
@@ -176,7 +193,7 @@ beforeAll(async () => {
             params: { name, arguments: args },
           }),
         }),
-        {}
+        { COOKIEAUTH_API_KEY: 'key-123' }
       );
       const text = await res.text();
       const line = text.split('\n').find((l) => l.startsWith('data: '));
@@ -216,6 +233,8 @@ describe('execution metadata', () => {
       { name: 'spaces', in: 'query', style: 'spaceDelimited' },
       { name: 'q', in: 'query' },
       { name: 'filter', in: 'query', style: 'deepObject', explode: true },
+      { name: 'session_id', in: 'cookie' },
+      { name: 'prefs', in: 'cookie', explode: false },
     ]);
   });
 
@@ -284,14 +303,43 @@ describe('query parameter serialization', () => {
   });
 });
 
+describe('cookie parameters', () => {
+  it('sends cookie parameters in the Cookie header, percent-encoded', async () => {
+    for (const { label, call } of targets) {
+      const seen = await lastRequest(call, label, 'listItems', {
+        session_id: 'sess 123',
+        prefs: ['a', 'b'],
+      });
+      expect(seen.rawQuery, label).toBe('');
+      expect(seen.cookie, label).toBe('session_id=sess%20123; prefs=a%2Cb');
+    }
+  });
+
+  it('keeps both a cookie parameter and an apiKey cookie credential', async () => {
+    for (const { label, call } of targets) {
+      const seen = await lastRequest(call, label, 'secureItems', { session_id: 'sess-123' });
+      const pairs = (seen.cookie ?? '').split('; ').sort();
+      expect(pairs, label).toEqual(['api_token=key-123', 'session_id=sess-123']);
+    }
+  });
+
+  it('sends only the credential cookie when no cookie parameter is given', async () => {
+    for (const { label, call } of targets) {
+      const seen = await lastRequest(call, label, 'secureItems', {});
+      expect(seen.cookie, label).toBe('api_token=key-123');
+    }
+  });
+});
+
 describe('every Node transport', () => {
-  it('serializes query parameters the same way', () => {
+  it('serializes query and cookie parameters the same way', () => {
     const specPath = path.join(workdir, 'spec.json');
     for (const transport of ['web', 'streamable-http']) {
       const dir = path.join(workdir, `node-${transport}`);
       generate(specPath, dir, ['--transport', transport]);
       const index = fs.readFileSync(path.join(dir, 'src', 'index.ts'), 'utf8');
       expect(index, transport).toContain('function serializeParameter(');
+      expect(index, transport).toContain("param.in === 'cookie'");
       expect(index, transport).not.toContain("value.join(',')");
     }
   });

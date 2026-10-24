@@ -445,6 +445,7 @@ async function executeApiTool(
     // Substitute path params.
     let pathName = def.pathTemplate;
     const queryPairs: [string, string][] = [];
+    const cookiePairs: [string, string][] = [];
     let bodyArg: unknown;
 
     for (const p of def.executionParameters) {
@@ -458,6 +459,8 @@ async function executeApiTool(
       } else if (p.in === 'query') {
         // OpenAPI style/explode: repeated keys by default, comma-joined with explode: false.
         queryPairs.push(...serializeParameter(p.name, value, p.style, p.explode));
+      } else if (p.in === 'cookie') {
+        cookiePairs.push(...serializeParameter(p.name, value, p.style, p.explode));
       } else if (p.in === 'header') {
         // collected below into headers
       }
@@ -489,6 +492,12 @@ async function executeApiTool(
     const headers: Record<string, string> = { accept: 'application/json' };
     for (const p of def.executionParameters) {
       if (p.in === 'header' && args[p.name] != null) headers[p.name] = String(args[p.name]);
+    }
+    // Cookie parameters share one Cookie header; an apiKey cookie credential is added to it below.
+    if (cookiePairs.length > 0) {
+      headers['cookie'] = cookiePairs
+        .map(([name, value]) => name + '=' + encodeURIComponent(value))
+        .join('; ');
     }
 
     let body: string | undefined;

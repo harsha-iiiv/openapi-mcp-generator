@@ -786,8 +786,9 @@ async function executeApiTool(
     const queryParams: Record<string, any> = {};
     const headers: Record<string, string> = { 'Accept': 'application/json' };
     let requestBodyData: any = undefined;
+    const cookiePairs: [string, string][] = [];
 
-    // Apply parameters to the URL path, query, or headers
+    // Apply parameters to the URL path, query, headers, or cookies
     definition.executionParameters.forEach((param) => {
         const value = validatedArgs[param.name];
         if (typeof value !== 'undefined' && value !== null) {
@@ -800,8 +801,16 @@ async function executeApiTool(
             else if (param.in === 'header') {
                 headers[param.name.toLowerCase()] = String(value);
             }
+            else if (param.in === 'cookie') {
+                cookiePairs.push(...serializeParameter(param.name, value, param.style, param.explode));
+            }
         }
     });
+
+    // Cookie parameters share one Cookie header; an apiKey cookie credential is added to it later
+    if (cookiePairs.length > 0) {
+        headers['cookie'] = cookiePairs.map(([name, value]) => name + '=' + encodeURIComponent(value)).join('; ');
+    }
 
     // Ensure all path parameters are resolved
     if (urlPath.includes('{')) {
