@@ -562,6 +562,73 @@ describe('#80 inbound auth and #55 header passthrough: cloudflare-worker', () =>
     expect(seen.headers['authorization']).toBe('Bearer tok-read');
   });
 
+  const callOpenWorker = async (name: string, env: Record<string, string>) => {
+    const res = await openWorker.fetch(
+      mcpRequest(
+        { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name, arguments: {} } },
+        { 'mcp-protocol-version': '2025-06-18' }
+      ),
+      env
+    );
+    expect(res.status).toBe(200);
+    return (await readJsonRpc(res)).result as {
+      isError?: boolean;
+      content: { type: string; text: string }[];
+    };
+  };
+
+  it('fails closed when required credentials are missing (#82)', async () => {
+    const before = upstream.requests.filter((r) => r.path === '/incomplete').length;
+    const result = await callOpenWorker('incompleteAnd', { APIKEYHEADER_API_KEY: 'header-key' });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(
+      "Missing credentials for 'incompleteAnd': set APIKEYHEADER_API_KEY and " +
+        'BASICAUTH_USERNAME (and BASICAUTH_PASSWORD) (wrangler secret put <NAME>).'
+    );
+    expect(upstream.requests.filter((r) => r.path === '/incomplete').length).toBe(before);
+
+    const or = await callOpenWorker('orAlternatives', {});
+    expect(or.isError).toBe(true);
+    expect(or.content[0].text).toContain('set BEARERAUTH_TOKEN, or APIKEYQUERY_API_KEY');
+  });
+
+  it('keeps anonymous access when the operation allows it ({}) or declares no security', async () => {
+    expect((await callOpenWorker('optionalAuth', {})).isError ?? false).toBe(false);
+    expect(lastRequest(upstream, '/optional').headers['x-api-key']).toBeUndefined();
+    expect((await callOpenWorker('publicEndpoint', {})).isError ?? false).toBe(false);
+  });
+
+  it('MCP_ALLOW_MISSING_CREDENTIALS="true" sends without credentials, never partially', async () => {
+    const result = await callOpenWorker('incompleteAnd', {
+      APIKEYHEADER_API_KEY: 'header-key',
+      MCP_ALLOW_MISSING_CREDENTIALS: 'true',
+    });
+    expect(result.isError ?? false).toBe(false);
+    const seen = lastRequest(upstream, '/incomplete');
+    expect(seen.headers['x-api-key']).toBeUndefined();
+    expect(seen.headers['authorization']).toBeUndefined();
+  });
+
+  it('names the passthrough header as an alternative to the secret', async () => {
+    const res = await worker.fetch(
+      mcpRequest(
+        {
+          jsonrpc: '2.0',
+          id: 5,
+          method: 'tools/call',
+          params: { name: 'andRequirement', arguments: {} },
+        },
+        { authorization: 'Bearer correct-token', 'mcp-protocol-version': '2025-06-18' }
+      ),
+      { MCP_AUTH_TOKEN: 'correct-token' }
+    );
+    const result = (await readJsonRpc(res)).result;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain(
+      "APIKEYHEADER_API_KEY or the 'x-api-key' request header"
+    );
+  });
+
   it('keeps the endpoint public by default (no --inbound-auth)', async () => {
     const res = await openWorker.fetch(mcpRequest(initializeBody), {});
     expect(res.status).toBe(200);
@@ -611,10 +678,16 @@ describe('#81 security requirements: generated Node server (stdio)', () => {
   });
 
   it('never sends a partial AND group, and falls back to the next alternative', async () => {
-    await callTool('incompleteAnd');
-    const incomplete = lastRequest(upstream, '/incomplete');
-    expect(incomplete.headers['x-api-key']).toBeUndefined();
-    expect(incomplete.headers['authorization']).toBeUndefined();
+    // Fails closed (#82): no complete alternative, so the API is not called at all.
+    const before = upstream.requests.filter((r) => r.path === '/incomplete').length;
+    const incomplete = await callTool('incompleteAnd');
+    expect(incomplete.isError).toBe(true);
+    expect((incomplete.content as { text: string }[])[0].text).toBe(
+      "Missing credentials for 'incompleteAnd': set API_KEY_APIKEYHEADER and " +
+        'BASIC_USERNAME_BASICAUTH (and BASIC_PASSWORD_BASICAUTH). ' +
+        'Required security: [apiKeyHeader AND basicAuth].'
+    );
+    expect(upstream.requests.filter((r) => r.path === '/incomplete').length).toBe(before);
 
     await callTool('fallbackAfterIncomplete');
     const fallback = lastRequest(upstream, '/fallback');
@@ -634,11 +707,38 @@ describe('#81 security requirements: generated Node server (stdio)', () => {
     expect(pub.headers['x-api-key']).toBeUndefined();
     expect(pub.query.api_key).toBeUndefined();
 
-    await callTool('tokenFailure');
-    const failed = lastRequest(upstream, '/token-failure');
-    expect(failed.headers['x-api-key']).toBeUndefined();
-    expect(failed.headers['authorization']).toBeUndefined();
+    // A failed token request leaves the requirement unsatisfied: fail closed.
+    const failed = await callTool('tokenFailure');
+    expect(failed.isError).toBe(true);
+    expect((failed.content as { text: string }[])[0].text).toContain(
+      'OAUTH_TOKEN_OAUTH (or OAUTH_CLIENT_ID_OAUTH and OAUTH_CLIENT_SECRET_OAUTH)'
+    );
+    expect(upstream.requests.some((r) => r.path === '/token-failure')).toBe(false);
   });
+
+  it('MCP_ALLOW_MISSING_CREDENTIALS=true restores warn-and-send, without partial credentials', async () => {
+    const outDir = path.join(workdir, 'node-stdio');
+    const permissive = new Client({ name: 'auth-test-permissive', version: '1.0.0' });
+    await permissive.connect(
+      new StdioClientTransport({
+        command: 'node',
+        args: [path.join(outDir, 'build', 'index.js')],
+        cwd: outDir,
+        stderr: 'pipe',
+        env: {
+          ...getDefaultEnvironment(),
+          API_KEY_APIKEYHEADER: 'header-key',
+          MCP_ALLOW_MISSING_CREDENTIALS: 'true',
+        },
+      })
+    );
+    const result = await permissive.callTool({ name: 'incompleteAnd', arguments: {} });
+    expect(result.isError ?? false).toBe(false);
+    const incomplete = lastRequest(upstream, '/incomplete');
+    expect(incomplete.headers['x-api-key']).toBeUndefined();
+    expect(incomplete.headers['authorization']).toBeUndefined();
+    await permissive.close();
+  }, 60_000);
 
   it('rejects unknown tools with a JSON-RPC protocol error (-32602)', async () => {
     await expect(client.callTool({ name: 'no_such_tool', arguments: {} })).rejects.toMatchObject({
@@ -702,6 +802,8 @@ describe('#80 inbound auth: generated Node HTTP servers', () => {
   it('documents the token in .env.example without writing a value', () => {
     const envExample = fs.readFileSync(path.join(httpDir, '.env.example'), 'utf8');
     expect(envExample).toMatch(/^MCP_AUTH_TOKEN=$/m);
+    // The fail-closed escape hatch is documented, off by default (#82).
+    expect(envExample).toMatch(/^MCP_ALLOW_MISSING_CREDENTIALS=$/m);
     const transport = fs.readFileSync(path.join(httpDir, 'src', 'streamable-http.ts'), 'utf8');
     expect(transport).not.toContain(token);
     expect(transport).toContain("app.use('/mcp', requireInboundAuth)");

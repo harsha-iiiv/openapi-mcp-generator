@@ -382,7 +382,15 @@ const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false });
             console.error(\`Applied \${credential.description}\`);
         }
     } else if (securityResolution.status === 'unsatisfied') {
-        console.warn(\`Tool '\${toolName}' requires security: \${securityResolution.summary}, but no complete set of credentials is configured. Sending the request without upstream credentials.\`);
+        // Fail closed (issue #82): do not call the API without the credentials it requires,
+        // unless MCP_ALLOW_MISSING_CREDENTIALS=true restores the old warn-and-send behavior.
+        if (String(process.env.MCP_ALLOW_MISSING_CREDENTIALS ?? '').toLowerCase() === 'true') {
+            console.warn(\`Tool '\${toolName}' requires security: \${securityResolution.summary}, but no complete set of credentials is configured. Sending the request without upstream credentials (MCP_ALLOW_MISSING_CREDENTIALS=true).\`);
+        } else {
+            const message = describeMissingCredentials(toolName, definition.securityRequirements, allSecuritySchemes, ${JSON.stringify(headerPassthroughNames.map((h) => h.toLowerCase()))});
+            console.error(message);
+            return { isError: true, content: [{ type: 'text', text: message }] };
+        }
     }
     `;
 
@@ -565,6 +573,55 @@ function describeSecurityRequirements(requirements: Record<string, string[]>[]):
             return \`[\${parts.length > 0 ? parts.join(' AND ') : 'no auth'}]\`;
         })
         .join(' OR ');
+}
+
+/**
+ * Environment variables (or forwarded headers) that supply one scheme's credential.
+ */
+function credentialHint(schemeName: string, scheme: any, passthroughNames: string[]): string {
+    const suffix = schemeName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+    let hint: string;
+    if (!scheme) {
+        return \`(security scheme '\${schemeName}' is not defined in the spec)\`;
+    } else if (scheme.type === 'apiKey') {
+        hint = \`API_KEY_\${suffix}\`;
+    } else if (scheme.type === 'http' && String(scheme.scheme ?? '').toLowerCase() === 'bearer') {
+        hint = \`BEARER_TOKEN_\${suffix}\`;
+    } else if (scheme.type === 'http' && String(scheme.scheme ?? '').toLowerCase() === 'basic') {
+        hint = \`BASIC_USERNAME_\${suffix} (and BASIC_PASSWORD_\${suffix})\`;
+    } else if (scheme.type === 'oauth2') {
+        hint = scheme.flows?.clientCredentials || scheme.flows?.password
+            ? \`OAUTH_TOKEN_\${suffix} (or OAUTH_CLIENT_ID_\${suffix} and OAUTH_CLIENT_SECRET_\${suffix})\`
+            : \`OAUTH_TOKEN_\${suffix}\`;
+    } else if (scheme.type === 'openIdConnect') {
+        hint = \`OPENID_TOKEN_\${suffix}\`;
+    } else {
+        return \`(security scheme '\${schemeName}' of type \${scheme.type} is not supported)\`;
+    }
+    const header = credentialHeaderName(scheme);
+    return header !== undefined && passthroughNames.includes(header)
+        ? \`\${hint} or the '\${header}' request header\`
+        : hint;
+}
+
+/**
+ * Tool error text for an operation whose security requirements cannot be met,
+ * e.g. "Missing credentials for 'getPet': set API_KEY_PETSTORE_AUTH."
+ */
+function describeMissingCredentials(
+    toolName: string,
+    requirements: Record<string, string[]>[],
+    allSecuritySchemes: Record<string, any>,
+    passthroughNames: string[]
+): string {
+    const alternatives = requirements
+        .filter((requirement) => Object.keys(requirement ?? {}).length > 0)
+        .map((requirement) =>
+            Object.keys(requirement)
+                .map((schemeName) => credentialHint(schemeName, allSecuritySchemes[schemeName], passthroughNames))
+                .join(' and ')
+        );
+    return \`Missing credentials for '\${toolName}': set \${alternatives.join(', or ')}. Required security: \${describeSecurityRequirements(requirements)}.\`;
 }
 
 /**

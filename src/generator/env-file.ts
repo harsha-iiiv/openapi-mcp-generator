@@ -72,6 +72,12 @@ API_BASE_URL=your_api_base_url_here
         content += `${getEnvVarName(name, 'OPENID_TOKEN')}=your_openid_token_here\n`;
       }
     }
+    content += `
+# A tool whose operation requires credentials that are not configured fails with
+# an error naming the variables to set, without calling the API. Set to true to
+# send such requests without upstream credentials instead (the 4.x behavior).
+MCP_ALLOW_MISSING_CREDENTIALS=
+`;
   } else {
     content += `# No API authentication required\n`;
   }

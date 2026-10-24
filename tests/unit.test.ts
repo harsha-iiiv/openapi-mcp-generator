@@ -966,7 +966,7 @@ describe('cloudflare-worker target', () => {
     expect(auth).toContain('url.searchParams.set');
     // index.ts delegates to the auth module instead of embedding scheme metadata.
     expect(fileContent(files, 'src/index.ts')).toContain(
-      "import { applyAuth } from './upstream-auth.js'"
+      "import { applyAuth, describeMissingCredentials, requiresCredentials } from './upstream-auth.js'"
     );
   });
 

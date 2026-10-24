@@ -274,7 +274,7 @@ import {
 } from '@modelcontextprotocol/server';
 import { Validator, type OutputUnit } from '@cfworker/json-schema';
 import { toolDefinitionMap, type McpToolDefinition } from './tools.js';
-import { applyAuth } from './upstream-auth.js';
+import { applyAuth, describeMissingCredentials, requiresCredentials } from './upstream-auth.js';
 import { PLAYGROUND_FILES, PLAYGROUND_HEADERS } from './playground.js';
 
 const SERVER_NAME = ${JSON.stringify(input.serverName)};
@@ -286,6 +286,8 @@ export interface Env {
   API_BASE_URL?: string;${envAuthFields}
   /** Set to "off" to stop serving the browser playground at /. */
   MCP_PLAYGROUND?: string;
+  /** Set to "true" to call the API even when its required credentials are missing. */
+  MCP_ALLOW_MISSING_CREDENTIALS?: string;
   /** Secrets are injected at runtime via \`wrangler secret put\`. */
   [key: string]: string | undefined;
 }
@@ -439,7 +441,23 @@ async function executeApiTool(
 
     // Upstream credentials: OR across requirement objects, AND within one (see upstream-auth.ts).
     // Forwarded client headers count as credentials for the schemes they carry.
-    await applyAuth(def.securityRequirements, env, headers, url, forwardedHeaders);
+    const appliedSchemes = await applyAuth(def.securityRequirements, env, headers, url, forwardedHeaders);
+    if (
+      appliedSchemes === null &&
+      requiresCredentials(def.securityRequirements) &&
+      String(env.MCP_ALLOW_MISSING_CREDENTIALS ?? '').toLowerCase() !== 'true'
+    ) {
+      // Fail closed (issue #82): never call the API without the credentials it requires.
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: describeMissingCredentials(def.name, def.securityRequirements, ${JSON.stringify(passthrough)}),
+          },
+        ],
+      };
+    }
 
     // Header passthrough (--header-passthrough): this request's client headers
     // override env-based auth for those names. Never shared across requests.
@@ -663,13 +681,62 @@ function applyCredential(
 }
 
 /**
+ * True when every alternative names at least one scheme, i.e. the operation
+ * cannot be called anonymously ({} is the OpenAPI way to make auth optional).
+ */
+export function requiresCredentials(securityRequirements: SecurityRequirement[] | undefined): boolean {
+  const requirements = Array.isArray(securityRequirements) ? securityRequirements : [];
+  return (
+    requirements.length > 0 &&
+    requirements.every((requirement) => Object.keys(requirement ?? {}).length > 0)
+  );
+}
+
+/** The secrets (or forwarded headers) that supply one scheme's credential. */
+function credentialHint(schemeName: string, passthroughNames: string[]): string {
+  const scheme = SECURITY_SCHEMES[schemeName];
+  if (!scheme) return \`(security scheme '\${schemeName}' is not defined in the spec)\`;
+  const upper = envPrefix(schemeName);
+  let hint: string;
+  if (scheme.type === 'apiKey') hint = \`\${upper}_API_KEY\`;
+  else if (scheme.type === 'http' && scheme.scheme === 'basic') hint = \`\${upper}_USERNAME (and \${upper}_PASSWORD)\`;
+  else if (scheme.type === 'http' || scheme.type === 'openIdConnect') hint = \`\${upper}_TOKEN\`;
+  else if (scheme.type === 'oauth2') {
+    hint = \`\${upper}_CLIENT_ID and \${upper}_CLIENT_SECRET\${scheme.tokenUrl ? '' : \` and \${upper}_TOKEN_URL\`}\`;
+  } else return \`(security scheme '\${schemeName}' of type \${scheme.type} is not supported)\`;
+  const header = credentialHeaderName(schemeName);
+  return header !== undefined && passthroughNames.includes(header)
+    ? \`\${hint} or the '\${header}' request header\`
+    : hint;
+}
+
+/**
+ * Tool error text for an operation whose security requirements cannot be met,
+ * e.g. "Missing credentials for 'getPet': set PETSTORE_AUTH_API_KEY."
+ */
+export function describeMissingCredentials(
+  toolName: string,
+  securityRequirements: SecurityRequirement[],
+  passthroughNames: string[] = []
+): string {
+  const alternatives = securityRequirements
+    .filter((requirement) => Object.keys(requirement ?? {}).length > 0)
+    .map((requirement) =>
+      Object.keys(requirement)
+        .map((schemeName) => credentialHint(schemeName, passthroughNames))
+        .join(' and ')
+    );
+  return \`Missing credentials for '\${toolName}': set \${alternatives.join(', or ')} (wrangler secret put <NAME>).\`;
+}
+
+/**
  * Applies upstream credentials for one tool call.
  *
  * Alternatives are tried in order; the first whose schemes ALL resolve is applied.
  * An empty alternative ({}) makes auth optional and is skipped in favour of one we
  * can satisfy. Returns the applied scheme names, or null when no alternative was
- * complete, in which case the request goes out without upstream credentials and
- * the API decides (typically 401).
+ * complete. The caller refuses the call in that case unless the operation allows
+ * anonymous access ({}) or MCP_ALLOW_MISSING_CREDENTIALS is "true".
  *
  * \`forwarded\` holds this request's passthrough headers (--header-passthrough). A
  * forwarded header satisfies the scheme whose credential travels in it, so a client
@@ -767,6 +834,15 @@ export function generateDevVarsExample(input: CloudflareWorkerGenInput): string 
         lines.push(`${upper}_API_KEY="..."`);
       }
     }
+  }
+  if (names.length > 0) {
+    lines.push(
+      '',
+      '# A tool whose required credentials are missing fails with an error naming the secrets',
+      '# to set, without calling the API. Set to "true" (here or in wrangler.jsonc vars) to send',
+      '# such requests without upstream credentials instead (the 4.x behavior).',
+      '# MCP_ALLOW_MISSING_CREDENTIALS="true"'
+    );
   }
   if (input.inboundAuth === 'bearer') {
     lines.push(
@@ -964,6 +1040,9 @@ npm run dev                      # http://localhost:8787/mcp
 
 - Non-secret config (e.g. \`API_BASE_URL\`) lives in \`wrangler.jsonc\` under \`vars\`.
 - Secrets (API keys, tokens, passwords) are set with \`wrangler secret put\` and never committed.
+- A tool whose operation requires credentials that are not configured returns an error naming the
+  secrets to set, without calling the API. Set the \`MCP_ALLOW_MISSING_CREDENTIALS\` var to \`"true"\`
+  to send such requests without upstream credentials instead.
 
 ## Try it in the browser
 
