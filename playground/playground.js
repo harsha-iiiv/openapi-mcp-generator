@@ -427,7 +427,9 @@ function setupConnectForm() {
       state.oauth = null;
       renderOAuthStatus();
     });
-    $('btn-signin').addEventListener('click', () => signIn());
+    $('btn-signin').addEventListener('click', async () => {
+      if (await signIn()) connect();
+    });
     $('btn-signout').addEventListener('click', () => {
       state.oauth?.signOut();
       renderOAuthStatus();
@@ -530,7 +532,10 @@ async function signIn(challenge) {
   setStatus('connecting', 'Signing in…');
   try {
     const oauth = await oauthFor(url);
-    await oauth.signIn(challenge || state.lastChallenge, { popup });
+    // Without a 401 in hand, ask the server once so its WWW-Authenticate challenge
+    // (resource metadata URL, scope) guides discovery.
+    const hint = challenge || (await probeChallenge(url)) || state.lastChallenge;
+    await oauth.signIn(hint, { popup });
     renderOAuthStatus();
     setStatus('idle', 'Signed in');
     return true;
@@ -546,6 +551,25 @@ async function signIn(challenge) {
     return false;
   } finally {
     $('btn-signin').disabled = false;
+  }
+}
+
+async function probeChallenge(url) {
+  const probe = new McpClient({
+    url,
+    transport: transportValue(),
+    hints: 'hosted',
+    relayUrl: relayUrl(),
+    listen: false,
+    timeoutMs: 20_000,
+    onTraffic: addTraffic,
+  });
+  try {
+    await probe.connect();
+    await probe.close();
+    return undefined;
+  } catch (error) {
+    return error instanceof McpHttpError ? error.challenge : undefined;
   }
 }
 
