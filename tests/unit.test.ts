@@ -19,6 +19,7 @@ import {
   shortenToolName,
   abbreviateToolName,
   splitNameIntoWords,
+  mapOpenApiSchemaToJsonSchema,
 } from '../src/parser/extract-tools.js';
 import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
 import {
@@ -157,6 +158,139 @@ describe('#68 external $ref SSRF guard', () => {
 });
 
 // --- #4: tool name truncation ------------------------------------------------
+
+describe('#77 OpenAPI 3.0 exclusiveMinimum conversion', () => {
+  it('converts the boolean exclusive bound to a JSON Schema numeric bound', () => {
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'number',
+        minimum: 0,
+        exclusiveMinimum: true,
+      } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'number', exclusiveMinimum: 0 });
+  });
+
+  it('preserves minimum when exclusiveMinimum is false', () => {
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'number',
+        minimum: 0,
+        exclusiveMinimum: false,
+      } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'number', minimum: 0 });
+  });
+
+  it('preserves numeric exclusiveMinimum from OpenAPI 3.1', () => {
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'number',
+        exclusiveMinimum: 0,
+      } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'number', exclusiveMinimum: 0 });
+  });
+
+  it('converts the OpenAPI 3.0 boolean exclusiveMaximum the same way', () => {
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'number',
+        maximum: 100,
+        exclusiveMaximum: true,
+      } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'number', exclusiveMaximum: 100 });
+    expect(
+      mapOpenApiSchemaToJsonSchema({
+        type: 'number',
+        maximum: 100,
+        exclusiveMaximum: false,
+      } as OpenAPIV3.SchemaObject)
+    ).toEqual({ type: 'number', maximum: 100 });
+  });
+
+  it('normalizes bounds in nested subschemas', () => {
+    const bounded = { type: 'number', minimum: 0, exclusiveMinimum: true } as const;
+    const expected = { type: 'number', exclusiveMinimum: 0 };
+    const mapped = mapOpenApiSchemaToJsonSchema({
+      type: 'object',
+      properties: {
+        composed: { allOf: [{ type: 'object', properties: { size: { ...bounded } } }] },
+        either: { oneOf: [{ ...bounded }, { type: 'string' }] },
+        any: { anyOf: [{ ...bounded }] },
+        excluded: { not: { ...bounded } },
+        map: { type: 'object', additionalProperties: { ...bounded } },
+        nullableObject: { type: 'object', nullable: true, properties: { size: { ...bounded } } },
+        untyped: { properties: { size: { ...bounded } } },
+        list: { type: 'array', items: { ...bounded } },
+      },
+    } as unknown as OpenAPIV3.SchemaObject) as any;
+
+    expect(mapped.properties.composed.allOf[0].properties.size).toEqual(expected);
+    expect(mapped.properties.either.oneOf[0]).toEqual(expected);
+    expect(mapped.properties.any.anyOf[0]).toEqual(expected);
+    expect(mapped.properties.excluded.not).toEqual(expected);
+    expect(mapped.properties.map.additionalProperties).toEqual(expected);
+    expect(mapped.properties.nullableObject.type).toEqual(['object', 'null']);
+    expect(mapped.properties.nullableObject.properties.size).toEqual(expected);
+    expect(mapped.properties.untyped.properties.size).toEqual(expected);
+    expect(mapped.properties.list.items).toEqual(expected);
+  });
+
+  it('applies the other OpenAPI conversions inside composed schemas too', () => {
+    const mapped = mapOpenApiSchemaToJsonSchema({
+      allOf: [{ type: 'string', nullable: true, example: 'a' }],
+    } as unknown as OpenAPIV3.SchemaObject) as any;
+    expect(mapped.allOf[0]).toEqual({ type: ['string', 'null'] });
+  });
+
+  it('does not modify the source schema', () => {
+    const source = { type: ['string'], nullable: true } as unknown as OpenAPIV3.SchemaObject;
+    mapOpenApiSchemaToJsonSchema(source);
+    expect(source).toEqual({ type: ['string'], nullable: true });
+  });
+
+  it('breaks cycles through composed schemas', () => {
+    const node: any = { type: 'object', properties: {} };
+    node.properties.child = { allOf: [node] };
+    const mapped = mapOpenApiSchemaToJsonSchema(node) as any;
+    expect(mapped.properties.child.allOf[0]).toEqual({ type: 'object' });
+  });
+
+  it('emits the converted bound in an operation request-body input schema', () => {
+    const [tool] = extractToolsFromApi({
+      openapi: '3.0.3',
+      info: { title: 'test', version: '1' },
+      paths: {
+        '/items': {
+          post: {
+            operationId: 'createItem',
+            requestBody: {
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      size: { type: 'number', minimum: 0, exclusiveMinimum: true },
+                    },
+                  },
+                },
+              },
+            },
+            responses: { '200': { description: 'ok' } },
+          },
+        },
+      },
+    });
+
+    expect(tool.inputSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        requestBody: {
+          type: 'object',
+          properties: { size: { type: 'number', exclusiveMinimum: 0 } },
+        },
+      },
+    });
+  });
+});
 
 describe('#4 tool name truncation', () => {
   it('leaves short names unchanged', () => {
