@@ -1478,6 +1478,19 @@ describe('generated OAuth2 docs', () => {
     expect(docs).not.toContain('## Token Caching');
   });
 
+  it('documents only OAUTH_TOKEN for password-only schemes', () => {
+    const docs = generateOAuth2Docs({
+      legacy: {
+        type: 'oauth2',
+        flows: { password: { tokenUrl: 'https://example.com/token', scopes: {} } },
+      },
+    });
+    expect(docs).toContain('`OAUTH_TOKEN_LEGACY`');
+    expect(docs).not.toContain('OAUTH_CLIENT_ID_LEGACY');
+    expect(docs).toContain('**Password Flow:**');
+    expect(docs).not.toContain('## Token Caching');
+  });
+
   it('documents client credentials and token caching when the server can fetch tokens', () => {
     const docs = generateOAuth2Docs(clientCredentials);
     expect(docs).toContain('`OAUTH_CLIENT_ID_MACHINE`');

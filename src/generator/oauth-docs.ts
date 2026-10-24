@@ -18,7 +18,7 @@ function scopesList(flow: OAuthFlowWithScopes | undefined): string {
  * Generates documentation about OAuth2 configuration.
  *
  * It mirrors what generated servers do at runtime: `OAUTH_TOKEN_<SCHEME>` works for
- * every flow, and only schemes with a client credentials or password flow can fetch a
+ * every flow, and only schemes with a client credentials flow can fetch a
  * token themselves from `OAUTH_CLIENT_ID_<SCHEME>` and `OAUTH_CLIENT_SECRET_<SCHEME>`.
  *
  * @param securitySchemes Security schemes from OpenAPI spec
@@ -45,7 +45,9 @@ export function generateOAuth2Docs(
   }
 
   const canFetchToken = (scheme: OpenAPIV3.OAuth2SecurityScheme) =>
-    Boolean(scheme.flows?.clientCredentials || scheme.flows?.password);
+    // The token request uses the client credentials grant, so a password-only scheme cannot
+    // fetch a token yet; document a pre-acquired token for it instead.
+    Boolean(scheme.flows?.clientCredentials);
   const anyFetches = oauth2Schemes.some(({ scheme }) => canFetchToken(scheme));
 
   let content = `# OAuth2 Configuration
@@ -55,7 +57,7 @@ This API uses OAuth2 for authentication. The MCP server can authenticate in the 
 1. **Using a pre-acquired token**: set \`OAUTH_TOKEN_<SCHEME>\` to a token you already obtained. This works for every flow.
 `;
   if (anyFetches) {
-    content += `2. **Fetching a token itself**: for schemes with a client credentials or password flow, the server requests a token with your client ID and secret.
+    content += `2. **Fetching a token itself**: for schemes with a client credentials flow, the server requests a token with your client ID and secret.
 `;
   }
   content += `
