@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * MCP Server generated from OpenAPI spec for swagger-petstore---openapi-3-0 v1.0.27
- * Generated on: 2026-10-24T18:01:39.398Z
+ * Generated on: 2026-10-24T18:18:25.728Z
  */
 
 import { existsSync } from 'node:fs';
@@ -573,7 +573,7 @@ async function acquireOAuth2Token(schemeName: string, scheme: any, requiredScope
             formData.append('scope', scopes);
         }
 
-        console.error(`Requesting OAuth2 token from ${tokenUrl}`);
+        console.error(`Requesting OAuth2 token for '${schemeName}'`);
 
         // Make the token request
         const response = await axios({

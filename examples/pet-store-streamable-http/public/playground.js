@@ -832,18 +832,24 @@ async function runTool() {
 }
 
 function findExchange(firstId) {
-  const out = [...state.traffic]
-    .reverse()
-    .find(
-      (e) => e.direction === 'out' && e.message?.method === 'tools/call' && e.message.id >= firstId
-    );
-  if (!out) return {};
-  const back = state.traffic.find(
-    (e) => e.direction === 'in' && e.message && e.message.id === out.message.id
+  // Ids restart at 1 on every connection and the traffic log survives a reconnect,
+  // so only entries recorded after this call can belong to it.
+  let index = -1;
+  for (let i = state.traffic.length - 1; i >= 0; i--) {
+    const e = state.traffic[i];
+    if (e.direction === 'out' && e.message?.method === 'tools/call' && e.message.id >= firstId) {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) return {};
+  const out = state.traffic[index];
+  const after = state.traffic.slice(index + 1);
+  // A server-to-client request can reuse the id; a reply never has a method.
+  const back = after.find(
+    (e) => e.direction === 'in' && e.message && !e.message.method && e.message.id === out.message.id
   );
-  const httpError = !back
-    ? [...state.traffic].reverse().find((e) => e.direction === 'in' && e.status >= 400)
-    : null;
+  const httpError = !back ? after.find((e) => e.direction === 'in' && e.status >= 400) : null;
   return { request: out.message, response: back?.message, httpError };
 }
 
