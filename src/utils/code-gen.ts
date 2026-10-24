@@ -178,6 +178,22 @@ const SUMMARY_KEYWORDS = new Set([
 ]);
 
 /**
+ * Readable text for one validation error. Exclusive bounds are reworded because
+ * @cfworker/json-schema reports a value equal to the bound as, for example,
+ * "1 is less than 1."
+ */
+function schemaErrorText(e: OutputUnit): string {
+    if (e.keyword === 'false') return 'Not allowed by the schema.';
+    if (e.keyword === 'exclusiveMinimum' || e.keyword === 'exclusiveMaximum') {
+        const bound = /(?:than|to) (\\S+)\\.$/.exec(e.error)?.[1];
+        if (bound !== undefined) {
+            return \`must be \${e.keyword === 'exclusiveMinimum' ? 'greater' : 'less'} than \${bound}.\`;
+        }
+    }
+    return e.error;
+}
+
+/**
  * Formats validation errors as "<location>: <message>" joined with "; ",
  * dropping summaries that only repeat a more specific error.
  */
@@ -197,8 +213,7 @@ function formatSchemaErrors(errors: OutputUnit[]): string {
     });
     const messages: string[] = [];
     for (const e of kept.length > 0 ? kept : errors) {
-        const text = e.keyword === 'false' ? 'Not allowed by the schema.' : e.error;
-        const message = \`\${location(e.instanceLocation)}: \${text}\`;
+        const message = \`\${location(e.instanceLocation)}: \${schemaErrorText(e)}\`;
         if (!messages.includes(message)) messages.push(message);
     }
     return messages.join('; ');

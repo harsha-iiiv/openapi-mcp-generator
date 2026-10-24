@@ -454,6 +454,72 @@ describe('argument validation with JSON Schema (no eval)', () => {
   });
 });
 
+// --- exclusive bound messages -------------------------------------------------------
+
+/** One operation whose integer query parameter has exclusive bounds (1, 10). */
+function boundsSpec(upstream: string, openapi: '3.0.3' | '3.1.0'): OpenAPIV3.Document {
+  const schema =
+    openapi === '3.0.3'
+      ? // OpenAPI 3.0 boolean form, converted to numeric JSON Schema bounds.
+        { type: 'integer', minimum: 1, exclusiveMinimum: true, maximum: 10, exclusiveMaximum: true }
+      : // OpenAPI 3.1 (JSON Schema) numeric form.
+        { type: 'integer', exclusiveMinimum: 1, exclusiveMaximum: 10 };
+  return {
+    openapi,
+    info: { title: `Exclusive Bounds ${openapi}`, version: '1.0.0' },
+    servers: [{ url: upstream }],
+    paths: {
+      '/bounds': {
+        get: {
+          operationId: 'checkBounds',
+          parameters: [{ name: 'count', in: 'query', required: true, schema }],
+          responses: { '200': { description: 'ok' } },
+        },
+      },
+    },
+  } as unknown as OpenAPIV3.Document;
+}
+
+describe('exclusive bound messages', () => {
+  let clients: AnyClient[] = [];
+
+  beforeAll(async () => {
+    clients = [
+      ...(await connectAll(workdir, 'bounds-30', boundsSpec(upstream.url, '3.0.3'))),
+      ...(await connectAll(workdir, 'bounds-31', boundsSpec(upstream.url, '3.1.0'))),
+    ];
+  }, 240_000);
+
+  afterAll(async () => {
+    for (const client of clients) await client.close();
+  });
+
+  it('says "must be greater/less than N" for a value equal to an exclusive bound', async () => {
+    expect(clients).toHaveLength(8);
+    for (const [index, client] of clients.entries()) {
+      const label = `${index < 4 ? '3.0' : '3.1'} ${client.label}`;
+      const before = upstream.requests.length;
+
+      const atMinimum = await client.callTool('checkBounds', { count: 1 });
+      expect(atMinimum.isError, label).toBe(true);
+      expect(textOf(atMinimum), label).toBe(
+        "Invalid arguments for tool 'checkBounds': /count: must be greater than 1."
+      );
+
+      const atMaximum = await client.callTool('checkBounds', { count: 10 });
+      expect(atMaximum.isError, label).toBe(true);
+      expect(textOf(atMaximum), label).toBe(
+        "Invalid arguments for tool 'checkBounds': /count: must be less than 10."
+      );
+      expect(upstream.requests.length, label).toBe(before);
+
+      const inside = await client.callTool('checkBounds', { count: 5 });
+      expect(inside.isError ?? false, label).toBe(false);
+      expect(upstream.requests.at(-1)?.query, label).toEqual({ count: '5' });
+    }
+  });
+});
+
 // --- lean generated Node projects --------------------------------------------------
 
 describe('lean generated Node projects', () => {
