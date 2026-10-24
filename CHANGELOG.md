@@ -50,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unknown tools, invalid arguments and upstream failures return `isError: true`.
 - Generated Worker projects install cleanly again: `@cloudflare/workers-types` is pinned to v5,
   matching current wrangler's peer range (a fresh `npm install` failed with ERESOLVE).
+- `--header-passthrough` headers count as credentials during security resolution on Node and
+  Worker targets. A client that forwards its own API key no longer leaves an AND requirement
+  incomplete when the server holds no key for that scheme, so the requirement's other
+  credentials (for example an OAuth2 token) are sent too.
+- `streamable-http`: sessions are released on every close path, and sessions idle longer than
+  `MCP_SESSION_IDLE_TIMEOUT` seconds (default 1800, `0` disables) are closed. Clients that
+  disconnected without `DELETE` previously kept their server instance in memory until restart.
 
 ### Changed
 

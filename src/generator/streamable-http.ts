@@ -71,6 +71,26 @@ type AppEnv = { Variables: { inboundPrincipal?: string } };
 interface Session {
   transport: WebStandardStreamableHTTPServerTransport;
   principal?: string;
+  /** Last request time (ms), for closing sessions abandoned without DELETE. */
+  lastSeen: number;
+}
+
+/** Default idle time after which an open session is closed: 30 minutes. */
+const DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 1800;
+
+/**
+ * Idle timeout for sessions in milliseconds, from MCP_SESSION_IDLE_TIMEOUT (seconds).
+ * 0 disables it; a missing or invalid value uses the 30-minute default.
+ */
+function sessionIdleTimeoutMs(): number {
+  const raw = (process.env.MCP_SESSION_IDLE_TIMEOUT ?? '').trim();
+  if (raw === '') return DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS * 1000;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    console.error('Ignoring invalid MCP_SESSION_IDLE_TIMEOUT "' + raw + '"; using ' + DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS + ' seconds.');
+    return DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS * 1000;
+  }
+  return seconds * 1000;
 }
 ${generateNodeOriginGuard()}${generateNodeInboundAuthMiddleware(inboundAuth)}${collectHeadersFn}
 /** JSON-RPC error body for transport-level failures. */
@@ -100,6 +120,23 @@ ${generateNodeInboundAuthMounts(inboundAuth, ['/mcp'])}
   // Open sessions by ID. Each session owns its own server instance, so
   // concurrent clients never share protocol state.
   const sessions = new Map<string, Session>();
+
+  // Clients that disconnect without DELETE never close their session, so idle
+  // sessions are closed (MCP_SESSION_IDLE_TIMEOUT seconds, default 30 minutes; 0
+  // disables). A client that comes back gets 404 and starts a new session.
+  const idleTimeoutMs = sessionIdleTimeoutMs();
+  if (idleTimeoutMs > 0) {
+    const sweep = setInterval(() => {
+      const now = Date.now();
+      for (const [id, session] of sessions) {
+        if (now - session.lastSeen < idleTimeoutMs) continue;
+        console.error(\`Closing idle session: \${id}\`);
+        sessions.delete(id);
+        session.transport.close().catch((err) => console.error('Error closing idle session:', err));
+      }
+    }, Math.max(1000, Math.min(idleTimeoutMs, 60_000)));
+    sweep.unref();
+  }
   
   // Add a simple health check endpoint
   app.get('/health', (c) => {
@@ -119,6 +156,7 @@ ${generateNodeInboundAuthMounts(inboundAuth, ['/mcp'])}
       if (!session || session.principal !== principal) {
         return c.json(jsonRpcError(-32001, 'Session not found'), 404);
       }
+      session.lastSeen = Date.now();
       return ${withHeaders('session.transport.handleRequest(c.req.raw)')};
     }
 
@@ -141,7 +179,7 @@ ${generateNodeInboundAuthMounts(inboundAuth, ['/mcp'])}
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
         console.error(\`New session established: \${id}\`);
-        sessions.set(id, { transport, principal });
+        sessions.set(id, { transport, principal, lastSeen: Date.now() });
       },
       onsessionclosed: (id) => {
         console.error(\`Session closed: \${id}\`);
@@ -150,6 +188,12 @@ ${generateNodeInboundAuthMounts(inboundAuth, ['/mcp'])}
     });
     transport.onerror = (err) => {
       console.error('StreamableHTTP transport error:', err);
+    };
+    // Every close path (DELETE, idle timeout, shutdown) releases the session. Set
+    // before connect(), which chains this handler with the server's own.
+    transport.onclose = () => {
+      const id = transport.sessionId;
+      if (id && sessions.get(id)?.transport === transport) sessions.delete(id);
     };
     const server = createServer();
     await server.connect(transport);

@@ -12,6 +12,8 @@ export interface EnvExampleOptions {
   inboundAuth?: InboundAuthMode;
   /** Document MCP_ALLOWED_ORIGINS (Node HTTP transports). */
   httpTransport?: boolean;
+  /** Document MCP_SESSION_IDLE_TIMEOUT (streamable-http sessions). */
+  streamableHttp?: boolean;
 }
 
 /**
@@ -77,6 +79,13 @@ API_BASE_URL=your_api_base_url_here
   }
 
   if (options.httpTransport) content += generateAllowedOriginsEnvDoc();
+  if (options.streamableHttp) {
+    content += `
+# Seconds a Streamable HTTP session may stay idle before the server closes it
+# (default 1800; 0 disables). Clients that come back start a new session.
+MCP_SESSION_IDLE_TIMEOUT=
+`;
+  }
   content += generateInboundAuthEnvDoc(options.inboundAuth);
 
   content += `\n# Add any other environment variables your API might need\n`;

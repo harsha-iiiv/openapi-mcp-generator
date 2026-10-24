@@ -57,6 +57,9 @@ Out of scope:
   never sent.
 - **`--header-passthrough`** forwards only the headers you list, and refuses `Authorization`
   while inbound auth is on (it would leak the MCP token upstream).
+- **Streamable HTTP sessions** are released when they close and expire after
+  `MCP_SESSION_IDLE_TIMEOUT` seconds of inactivity (default 1800), so abandoned sessions cannot
+  accumulate.
 - **stdio servers** have no network endpoint; only the process that launches them can talk to
   them.
 
