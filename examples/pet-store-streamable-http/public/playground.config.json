@@ -1,0 +1,6 @@
+{
+  "transport": "streamable-http",
+  "endpoint": "/mcp",
+  "inboundAuth": "none",
+  "generatedBy": "openapi-mcp-generator"
+}

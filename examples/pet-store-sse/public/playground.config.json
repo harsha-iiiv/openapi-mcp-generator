@@ -1,0 +1,6 @@
+{
+  "transport": "sse",
+  "endpoint": "/sse",
+  "inboundAuth": "none",
+  "generatedBy": "openapi-mcp-generator"
+}

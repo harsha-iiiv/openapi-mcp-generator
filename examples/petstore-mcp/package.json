@@ -1,6 +1,6 @@
 {
   "name": "swagger-petstore---openapi-3-0",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "description": "MCP Server generated from OpenAPI spec for swagger-petstore---openapi-3-0",
   "private": true,
   "type": "module",
@@ -11,21 +11,21 @@
   ],
   "scripts": {
     "start": "node build/index.js",
-    "build": "tsc && chmod 755 build/index.js",
+    "build": "tsc && shx chmod 755 build/index.js",
     "typecheck": "tsc --noEmit",
     "prestart": "npm run build"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.9.0",
-    "axios": "^1.8.4",
-    "json-schema-to-zod": "^2.6.1",
-    "zod": "^3.24.2"
+    "@modelcontextprotocol/server": "^2.4.0",
+    "@cfworker/json-schema": "^4.1.1",
+    "axios": "^1.20.0"
   },
   "devDependencies": {
-    "@types/node": "^18.19.0",
-    "typescript": "^5.4.5"
+    "@types/node": "^22.17.2",
+    "typescript": "^6.0.3",
+    "shx": "^0.4.0"
   }
 }

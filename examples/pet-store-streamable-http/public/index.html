@@ -1,424 +1,226 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>swagger-petstore---openapi-3-0 MCP StreamableHTTP Test Client</title>
-    <style>
-      body {
-        font-family:
-          system-ui,
-          -apple-system,
-          BlinkMacSystemFont,
-          'Segoe UI',
-          Roboto,
-          sans-serif;
-        max-width: 800px;
-        margin: 0 auto;
-        padding: 20px;
-        line-height: 1.5;
-      }
-      h1 {
-        margin-bottom: 10px;
-      }
-      .container {
-        display: flex;
-        flex-direction: column;
-        height: calc(100vh - 150px);
-      }
-      #conversation {
-        flex: 1;
-        border: 1px solid #ccc;
-        overflow-y: auto;
-        margin-bottom: 10px;
-        padding: 10px;
-        border-radius: 5px;
-      }
-      .input-area {
-        display: flex;
-        margin-bottom: 20px;
-      }
-      #userInput {
-        flex: 1;
-        padding: 8px;
-        font-size: 16px;
-        border: 1px solid #ccc;
-        border-radius: 5px 0 0 5px;
-      }
-      #sendButton {
-        padding: 8px 16px;
-        background-color: #4caf50;
-        color: white;
-        border: none;
-        cursor: pointer;
-        border-radius: 0 5px 5px 0;
-      }
-      #sendButton:hover {
-        background-color: #45a049;
-      }
-      .message {
-        margin-bottom: 10px;
-        padding: 8px 12px;
-        border-radius: 5px;
-      }
-      .user {
-        background-color: #e7f4ff;
-        align-self: flex-end;
-      }
-      .server {
-        background-color: #f1f1f1;
-      }
-      .system {
-        background-color: #fffde7;
-        color: #795548;
-        font-style: italic;
-      }
-      pre {
-        white-space: pre-wrap;
-        word-wrap: break-word;
-      }
-      code {
-        background-color: #f8f8f8;
-        padding: 2px 4px;
-        border-radius: 3px;
-      }
-      .status {
-        color: #666;
-        font-style: italic;
-        margin-bottom: 10px;
-      }
-      #debug {
-        margin-top: 20px;
-        background-color: #f8f8f8;
-        padding: 10px;
-        border-radius: 5px;
-        display: none;
-      }
-      .debug-controls {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-      }
-      #showDebug {
-        margin-top: 10px;
-        padding: 5px 10px;
-        cursor: pointer;
-        background-color: #f1f1f1;
-        border: 1px solid #ccc;
-        border-radius: 3px;
-      }
-      #debugLog {
-        max-height: 200px;
-        overflow-y: auto;
-        background-color: #111;
-        color: #0f0;
-        font-family: monospace;
-        padding: 5px;
-        margin-top: 10px;
-      }
-      .clear-debug {
-        padding: 3px 8px;
-        background-color: #f44336;
-        color: white;
-        border: none;
-        border-radius: 3px;
-        cursor: pointer;
-      }
-    </style>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="referrer" content="no-referrer" />
+    <title>MCP playground</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 7.5h5.5M4 12h3.5M4 16.5h5.5M12.5 7.5 17 12l-4.5 4.5'/%3E%3Ccircle cx='19.5' cy='12' r='1.4' fill='%230f766e' stroke='none'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="playground.css" />
+    <script type="module" src="playground.js"></script>
   </head>
   <body>
-    <h1>swagger-petstore---openapi-3-0 MCP StreamableHTTP Test Client</h1>
-    <p class="status" id="status">Disconnected</p>
-
-    <div class="container">
-      <div id="conversation"></div>
-
-      <div class="input-area">
-        <input type="text" id="userInput" placeholder="Type a message..." disabled />
-        <button id="sendButton" disabled>Send</button>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="bar">
+      <div class="brand">
+        <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7.5h5.5M4 12h3.5M4 16.5h5.5" />
+          <path d="M12.5 7.5 17 12l-4.5 4.5" />
+          <circle cx="19.5" cy="12" r="1.25" />
+        </svg>
+        <div class="brand-text">
+          <span id="server-name" class="server-name">MCP playground</span>
+          <span id="server-meta" class="server-meta"></span>
+        </div>
       </div>
-    </div>
-
-    <button id="showDebug">Show Debug Console</button>
-
-    <div id="debug">
-      <div class="debug-controls">
-        <h3>Debug Console</h3>
-        <button class="clear-debug" id="clearDebug">Clear</button>
+      <div class="bar-right">
+        <span id="status" class="status" data-state="idle" role="status" aria-live="polite"
+          ><i aria-hidden="true"></i><span id="status-text">Not connected</span></span
+        >
+        <button id="btn-clients" class="btn ghost small" type="button" hidden>
+          Connect a client
+        </button>
+        <button id="btn-disconnect" class="btn ghost small" type="button" hidden>Disconnect</button>
       </div>
-      <div id="debugLog"></div>
-    </div>
+    </header>
 
-    <script>
-      const conversation = document.getElementById('conversation');
-      const userInput = document.getElementById('userInput');
-      const sendButton = document.getElementById('sendButton');
-      const statusEl = document.getElementById('status');
-      const showDebugBtn = document.getElementById('showDebug');
-      const debugDiv = document.getElementById('debug');
-      const debugLog = document.getElementById('debugLog');
-      const clearDebugBtn = document.getElementById('clearDebug');
+    <main id="main" tabindex="-1">
+      <section id="connect" class="connect" aria-labelledby="connect-title">
+        <div class="connect-card">
+          <p class="eyebrow">MCP playground</p>
+          <h1 id="connect-title">Try every tool before you wire up a client.</h1>
+          <p class="lede">
+            Lists the server's tools, builds a form from each input schema and shows exactly what
+            goes over the wire. Requests go straight from this browser to the server.
+          </p>
+          <form id="connect-form" class="connect-form" novalidate>
+            <div class="field" id="url-field" hidden>
+              <label for="url">Server URL</label>
+              <input
+                id="url"
+                type="url"
+                inputmode="url"
+                spellcheck="false"
+                autocomplete="url"
+                placeholder="https://your-server.example.workers.dev/mcp"
+              />
+            </div>
+            <div class="field" id="transport-field" hidden>
+              <label for="transport">Transport</label>
+              <select id="transport">
+                <option value="streamable-http">Streamable HTTP</option>
+                <option value="sse">HTTP+SSE (legacy)</option>
+              </select>
+            </div>
+            <div class="endpoint" id="endpoint-row">
+              <span class="endpoint-label">Endpoint</span>
+              <code id="endpoint"></code>
+              <span id="transport-name" class="chip"></span>
+            </div>
+            <div class="field" id="token-field">
+              <label for="token"
+                >Bearer token <span class="hint" id="token-hint">optional</span></label
+              >
+              <div class="input-row">
+                <input
+                  id="token"
+                  type="password"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="Value of MCP_AUTH_TOKEN"
+                />
+                <button type="button" id="btn-reveal" class="btn ghost small" aria-pressed="false">
+                  Show
+                </button>
+              </div>
+              <label class="check"
+                ><input type="checkbox" id="remember" /> Remember in this tab</label
+              >
+            </div>
+            <div class="actions">
+              <button id="btn-connect" class="btn primary" type="submit">Connect</button>
+            </div>
+            <p id="connect-error" class="alert" role="alert" hidden></p>
+          </form>
+          <p class="fine">
+            Open source, part of
+            <a
+              href="https://github.com/harsha-iiiv/openapi-mcp-generator"
+              target="_blank"
+              rel="noopener noreferrer"
+              >openapi-mcp-generator</a
+            >. Your token never leaves this tab except as the Authorization header sent to this
+            server.
+          </p>
+        </div>
+      </section>
 
-      let sessionId = null;
-      let messageId = 1;
+      <section id="workspace" class="workspace" hidden>
+        <aside class="sidebar" aria-label="Tools">
+          <div class="search">
+            <input
+              id="search"
+              type="search"
+              placeholder="Search tools"
+              aria-label="Search tools"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <kbd aria-hidden="true">/</kbd>
+          </div>
+          <p id="tool-count" class="count"></p>
+          <div
+            id="tool-list"
+            class="tool-list"
+            role="listbox"
+            aria-label="Tools"
+            tabindex="0"
+          ></div>
+        </aside>
+        <section class="detail">
+          <div id="empty" class="empty"><p>Pick a tool on the left.</p></div>
+          <article id="tool" class="tool" hidden>
+            <header class="tool-head">
+              <div class="tool-title">
+                <h2 id="tool-name"></h2>
+                <div id="tool-tags" class="tags"></div>
+              </div>
+              <div class="tool-actions">
+                <button id="btn-raw" class="btn ghost small" type="button" aria-pressed="false">
+                  Edit as JSON
+                </button>
+                <button id="btn-curl" class="btn ghost small" type="button">Copy as curl</button>
+              </div>
+            </header>
+            <p id="tool-desc" class="desc"></p>
+            <form id="tool-form" class="tool-form" novalidate>
+              <div id="fields" class="fields"></div>
+              <div id="raw" class="raw" hidden>
+                <label for="raw-args">Arguments (JSON object)</label>
+                <textarea id="raw-args" spellcheck="false" rows="12"></textarea>
+              </div>
+              <div class="run">
+                <button id="btn-run" class="btn primary" type="submit">Run tool</button>
+                <span class="kbd-hint" id="kbd-hint"></span>
+                <span id="form-error" class="form-error" role="alert"></span>
+              </div>
+            </form>
+            <section id="result" class="result" hidden aria-label="Result">
+              <div class="progress" aria-hidden="true"></div>
+              <header class="result-head">
+                <span id="result-status" class="result-status"></span>
+                <div class="tabs" role="tablist" aria-label="Result view">
+                  <button
+                    role="tab"
+                    id="tab-output"
+                    aria-selected="true"
+                    data-tab="output"
+                    type="button"
+                  >
+                    Output
+                  </button>
+                  <button
+                    role="tab"
+                    id="tab-rpc"
+                    aria-selected="false"
+                    data-tab="rpc"
+                    type="button"
+                  >
+                    JSON-RPC
+                  </button>
+                </div>
+                <button id="btn-copy-result" class="btn ghost small" type="button">Copy</button>
+              </header>
+              <div
+                id="result-output"
+                class="result-body"
+                role="tabpanel"
+                aria-labelledby="tab-output"
+              ></div>
+              <div
+                id="result-rpc"
+                class="result-body"
+                role="tabpanel"
+                aria-labelledby="tab-rpc"
+                hidden
+              ></div>
+            </section>
+          </article>
+        </section>
+      </section>
+    </main>
 
-      // Debug logging
-      function log(type, message) {
-        const timestamp = new Date().toISOString().split('T')[1].slice(0, -1);
-        const entry = document.createElement('div');
-        entry.innerHTML = `<span style="color:#aaa;">${timestamp}</span> <span style="color:#58a6ff;">${type}:</span> ${message}`;
-        debugLog.appendChild(entry);
-        debugLog.scrollTop = debugLog.scrollHeight;
-        console.log(`${type}: ${message}`);
-      }
+    <details id="traffic" class="traffic">
+      <summary>
+        <span class="traffic-title">Traffic</span>
+        <span id="traffic-count" class="count"></span>
+        <button id="btn-clear" class="btn ghost small" type="button">Clear</button>
+      </summary>
+      <ol id="traffic-list" class="traffic-list"></ol>
+    </details>
 
-      // Toggle debug console
-      showDebugBtn.addEventListener('click', () => {
-        if (debugDiv.style.display === 'block') {
-          debugDiv.style.display = 'none';
-          showDebugBtn.textContent = 'Show Debug Console';
-        } else {
-          debugDiv.style.display = 'block';
-          showDebugBtn.textContent = 'Hide Debug Console';
-        }
-      });
+    <dialog id="clients" class="dialog" aria-labelledby="clients-title">
+      <header class="dialog-head">
+        <h2 id="clients-title">Connect a client</h2>
+        <button id="btn-close-clients" class="btn ghost small" type="button">Close</button>
+      </header>
+      <div id="client-snippets" class="snippets"></div>
+    </dialog>
 
-      // Clear debug logs
-      clearDebugBtn.addEventListener('click', () => {
-        debugLog.innerHTML = '';
-      });
-
-      // Initialize the MCP connection
-      async function initialize() {
-        statusEl.textContent = 'Connecting...';
-        log('INFO', 'Initializing MCP connection...');
-
-        try {
-          const requestBody = {
-            jsonrpc: '2.0',
-            id: messageId++,
-            method: 'initialize',
-            params: {
-              clientName: 'MCP StreamableHTTP Test Client',
-              clientVersion: '1.0.0',
-              capabilities: {},
-            },
-          };
-
-          log('REQUEST', JSON.stringify(requestBody));
-
-          const response = await fetch('/mcp', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestBody),
-          });
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            log('ERROR', `Error response: ${response.status} ${response.statusText} ${errorText}`);
-            appendMessage(
-              'system',
-              `Error: ${response.status} ${response.statusText}\n${errorText}`
-            );
-            statusEl.textContent = 'Connection error. Try again.';
-            return;
-          }
-
-          // Get session ID from response headers
-          sessionId = response.headers.get('mcp-session-id');
-
-          if (!sessionId) {
-            log('ERROR', 'No session ID in response headers');
-            appendMessage('system', 'Error: No session ID in response headers');
-            statusEl.textContent = 'Connection error. Try again.';
-            return;
-          }
-
-          // Process response body
-          const data = await response.json();
-          log('RESPONSE', JSON.stringify(data));
-
-          if (data.result) {
-            appendMessage('server', JSON.stringify(data.result, null, 2));
-          }
-
-          // Enable UI
-          statusEl.textContent = `Connected (Session ID: ${sessionId})`;
-          userInput.disabled = false;
-          sendButton.disabled = false;
-          userInput.focus();
-          appendMessage('system', `Connected with session ID: ${sessionId}`);
-
-          // Get list of tools
-          await listTools();
-        } catch (error) {
-          log('ERROR', `Error during initialization: ${error.message}`);
-          appendMessage('system', `Error during initialization: ${error.message}`);
-          statusEl.textContent = 'Connection error. Try again.';
-        }
-      }
-
-      // Get list of available tools
-      async function listTools() {
-        try {
-          const requestBody = {
-            jsonrpc: '2.0',
-            id: messageId++,
-            method: 'listTools',
-            params: {},
-          };
-
-          log('REQUEST', JSON.stringify(requestBody));
-
-          const response = await fetch('http://localhost:3000/mcp', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'mcp-session-id': sessionId,
-            },
-            body: JSON.stringify(requestBody),
-          });
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            log(
-              'ERROR',
-              `Error listing tools: ${response.status} ${response.statusText} ${errorText}`
-            );
-            return;
-          }
-
-          const data = await response.json();
-          log('TOOLS', JSON.stringify(data));
-
-          if (data.result?.tools && Array.isArray(data.result.tools)) {
-            appendMessage(
-              'system',
-              `Available tools: ${data.result.tools.map((t) => t.name).join(', ')}`
-            );
-          }
-        } catch (error) {
-          log('ERROR', `Error listing tools: ${error.message}`);
-        }
-      }
-
-      // Send a message to the server
-      async function sendMessage() {
-        const text = userInput.value.trim();
-        if (!text || !sessionId) return;
-
-        appendMessage('user', text);
-        userInput.value = '';
-
-        log('INFO', `Sending message: ${text}`);
-
-        try {
-          const parts = text.split(' ');
-          const toolName = parts[0];
-
-          const requestBody = {
-            jsonrpc: '2.0',
-            id: messageId++,
-            method: 'callTool',
-            params: {
-              name: toolName,
-              arguments: parseArguments(text),
-            },
-          };
-
-          log('REQUEST', JSON.stringify(requestBody));
-
-          const response = await fetch('/mcp', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'mcp-session-id': sessionId,
-            },
-            body: JSON.stringify(requestBody),
-          });
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            log('ERROR', `Error response: ${response.status} ${response.statusText} ${errorText}`);
-            appendMessage(
-              'system',
-              `Error: ${response.status} ${response.statusText}\n${errorText}`
-            );
-            return;
-          }
-
-          const data = await response.json();
-          log('RESPONSE', JSON.stringify(data));
-
-          if (data.error) {
-            appendMessage('system', `Error: ${data.error.code} - ${data.error.message}`);
-          } else if (data.result) {
-            appendMessage('server', JSON.stringify(data.result, null, 2));
-          }
-        } catch (error) {
-          log('ERROR', `Error sending message: ${error.message}`);
-          appendMessage('system', `Error sending message: ${error.message}`);
-        }
-      }
-
-      // Try to parse arguments from user input
-      // Format: toolName param1=value1 param2=value2
-      function parseArguments(text) {
-        const parts = text.split(' ');
-        if (parts.length <= 1) return {};
-
-        const args = {};
-        // Skip the first part (tool name) and process the rest
-        for (let i = 1; i < parts.length; i++) {
-          const part = parts[i];
-          const equalsIndex = part.indexOf('=');
-
-          if (equalsIndex > 0) {
-            const key = part.substring(0, equalsIndex);
-            const value = part.substring(equalsIndex + 1);
-
-            // Try to parse as number or boolean if possible
-            if (value === 'true') args[key] = true;
-            else if (value === 'false') args[key] = false;
-            else if (!isNaN(Number(value))) args[key] = Number(value);
-            else args[key] = value;
-          }
-        }
-
-        return args;
-      }
-
-      // Add a message to the conversation
-      function appendMessage(sender, text) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${sender}`;
-
-        // Format as code block if it looks like JSON
-        if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
-          const pre = document.createElement('pre');
-          const code = document.createElement('code');
-          code.textContent = text;
-          pre.appendChild(code);
-          messageDiv.appendChild(pre);
-        } else {
-          messageDiv.textContent = text;
-        }
-
-        conversation.appendChild(messageDiv);
-        conversation.scrollTop = conversation.scrollHeight;
-      }
-
-      // Event listeners
-      sendButton.addEventListener('click', sendMessage);
-      userInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') sendMessage();
-      });
-
-      // Initialize on page load
-      appendMessage('system', 'Initializing MCP connection...');
-      initialize();
-    </script>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   </body>
 </html>
