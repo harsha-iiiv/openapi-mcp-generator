@@ -503,8 +503,9 @@ async function executeApiTool(
     let body: string | undefined;
     if (bodyArg !== undefined && def.requestBodyContentType) {
       headers['content-type'] = def.requestBodyContentType;
-      body =
-        def.requestBodyContentType.includes('json') ? JSON.stringify(bodyArg) : String(bodyArg);
+      body = def.requestBodyContentType.toLowerCase().includes('json')
+        ? JSON.stringify(bodyArg)
+        : String(bodyArg);
     }
 
     // Upstream credentials: OR across requirement objects, AND within one (see upstream-auth.ts).

@@ -1610,4 +1610,18 @@ describe('request body JSON media types', () => {
       expect(requestBodyContentType).toBe(mediaType);
     }
   );
+
+  it('serializes the Worker body as JSON whatever the media type casing', () => {
+    // Media type names are case-insensitive, so `Application/JSON` is picked above and the
+    // generated Worker must JSON-serialize it instead of String()-ing the object.
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'test-mcp',
+      serverVersion: '0.1.0',
+      securitySchemes: undefined,
+      baseUrl: 'https://api.example.com',
+    });
+    const index = files.find((f) => f.path === 'src/index.ts')?.content ?? '';
+    expect(index).toContain("def.requestBodyContentType.toLowerCase().includes('json')");
+  });
 });
