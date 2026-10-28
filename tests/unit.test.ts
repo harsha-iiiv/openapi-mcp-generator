@@ -26,6 +26,7 @@ import {
   getToolTitle,
   filterTools,
   getOutputSchema,
+  generateInputSchemaAndDetails,
 } from '../src/parser/extract-tools.js';
 import { generateToolDefinitionMap } from '../src/utils/code-gen.js';
 import {
@@ -1546,5 +1547,81 @@ describe('OAuth2 token acquisition logging', () => {
     const code = generateOAuth2TokenAcquisitionCode();
     expect(code).not.toContain('Requesting OAuth2 token from');
     expect(code).toContain("Requesting OAuth2 token for '");
+  });
+});
+
+describe('request body JSON media types', () => {
+  const bodySchema = {
+    type: 'object',
+    properties: { name: { type: 'string' } },
+    required: ['name'],
+  } as const;
+
+  const requestBodyFor = (content: Record<string, OpenAPIV3.MediaTypeObject>) => {
+    const { inputSchema, requestBodyContentType } = generateInputSchemaAndDetails({
+      requestBody: { required: true, content },
+      responses: {},
+    } as OpenAPIV3.OperationObject);
+    const properties = (inputSchema as { properties: Record<string, { type?: string }> })
+      .properties;
+    return { requestBody: properties['requestBody'], requestBodyContentType };
+  };
+
+  it.each([
+    'application/json',
+    'application/json; charset=utf-8',
+    'application/json;charset=UTF-8',
+    'application/vnd.api+json',
+    'application/problem+json',
+    'Application/JSON',
+  ])('keeps the body schema for %s', (mediaType) => {
+    const { requestBody, requestBodyContentType } = requestBodyFor({
+      [mediaType]: { schema: bodySchema },
+    });
+    expect(requestBody).toMatchObject({ type: 'object', required: ['name'] });
+    expect(requestBodyContentType).toBe(mediaType);
+  });
+
+  it('prefers exact application/json over other JSON media types', () => {
+    const { requestBody, requestBodyContentType } = requestBodyFor({
+      'application/vnd.api+json': { schema: { type: 'array', items: { type: 'string' } } },
+      'application/json': { schema: bodySchema },
+    });
+    expect(requestBody).toMatchObject({ type: 'object' });
+    expect(requestBodyContentType).toBe('application/json');
+  });
+
+  it('skips a JSON media type that declares no schema', () => {
+    const { requestBody, requestBodyContentType } = requestBodyFor({
+      'application/json': {},
+      'application/vnd.api+json': { schema: bodySchema },
+    });
+    expect(requestBody).toMatchObject({ type: 'object' });
+    expect(requestBodyContentType).toBe('application/vnd.api+json');
+  });
+
+  it.each(['text/plain', 'application/json-seq', 'application/jsonx', 'application/x-ndjson'])(
+    'still exposes %s as a string body',
+    (mediaType) => {
+      const { requestBody, requestBodyContentType } = requestBodyFor({
+        [mediaType]: { schema: bodySchema },
+      });
+      expect(requestBody).toMatchObject({ type: 'string' });
+      expect(requestBodyContentType).toBe(mediaType);
+    }
+  );
+
+  it('serializes the Worker body as JSON whatever the media type casing', () => {
+    // Media type names are case-insensitive, so `Application/JSON` is picked above and the
+    // generated Worker must JSON-serialize it instead of String()-ing the object.
+    const files = generateCloudflareWorkerFiles({
+      tools: [],
+      serverName: 'test-mcp',
+      serverVersion: '0.1.0',
+      securitySchemes: undefined,
+      baseUrl: 'https://api.example.com',
+    });
+    const index = files.find((f) => f.path === 'src/index.ts')?.content ?? '';
+    expect(index).toContain("def.requestBodyContentType.toLowerCase().includes('json')");
   });
 });

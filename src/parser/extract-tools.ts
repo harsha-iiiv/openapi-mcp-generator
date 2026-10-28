@@ -230,6 +230,28 @@ export function getToolTitle(operation: object): string | undefined {
 }
 
 /**
+ * JSON media types: `application/json` or a `+json` suffix type such as
+ * `application/vnd.api+json`, with or without parameters (`; charset=utf-8`).
+ */
+const JSON_MEDIA_TYPE = /^application\/(?:[^;\s]+\+)?json\s*(?:;|$)/i;
+
+/**
+ * Picks the request body media type whose schema becomes the tool's
+ * `requestBody` argument: exact `application/json` when it declares a schema,
+ * otherwise the first other JSON media type that does.
+ */
+function findJsonRequestContent(
+  content: OpenAPIV3.RequestBodyObject['content'] | undefined
+): [string, OpenAPIV3.MediaTypeObject] | undefined {
+  if (!content) return undefined;
+  const exact = content['application/json'];
+  if (exact?.schema) return ['application/json', exact];
+  return Object.entries(content).find(
+    ([type, media]) => JSON_MEDIA_TYPE.test(type) && media?.schema
+  );
+}
+
+/**
  * Extracts tool definitions from an OpenAPI document
  *
  * @param api OpenAPI document
@@ -457,13 +479,14 @@ export function generateInputSchemaAndDetails(
 
   if (operation.requestBody) {
     const opRequestBody = operation.requestBody as OpenAPIV3.RequestBodyObject;
-    const jsonContent = opRequestBody.content?.['application/json'];
+    const jsonEntry = findJsonRequestContent(opRequestBody.content);
+    const jsonContent = jsonEntry?.[1];
     const firstContent = opRequestBody.content
       ? Object.entries(opRequestBody.content)[0]
       : undefined;
 
-    if (jsonContent?.schema) {
-      requestBodyContentType = 'application/json';
+    if (jsonEntry && jsonContent?.schema) {
+      requestBodyContentType = jsonEntry[0];
       const bodySchema = mapOpenApiSchemaToJsonSchema(
         jsonContent.schema as OpenAPIV3.SchemaObject,
         {
