@@ -109,6 +109,11 @@ export interface CliOptions {
    * schema (object schemas only) and validate responses against it. Default false.
    */
   outputSchema?: boolean;
+  /**
+   * Also emit a mcp-toolguard policy (toolguard.yaml) and a `start:guarded` script that runs the
+   * server behind the mcp-toolguard security proxy. Default false.
+   */
+  toolguard?: boolean;
 }
 
 /**

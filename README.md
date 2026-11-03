@@ -105,6 +105,7 @@ The [`examples/`](./examples) folder holds the Swagger Petstore generated with 5
 | `--include-operations`   |       | Comma-separated operationIds or tool names to generate. Combined with `--include-tags` as a union.                                             | _(all)_                           |
 | `--exclude-operations`   |       | Comma-separated operationIds or tool names to skip. Exclusions win over inclusions.                                                            | _(none)_                          |
 | `--output-schema`        |       | Declare each tool's `outputSchema` from its 2xx JSON response schema (objects only) and reject responses that do not match it.                 | `false`                           |
+| `--toolguard`            |       | Also emit `toolguard.yaml` and a `start:guarded` script that run the server behind [mcp-toolguard](#-guard-the-server-with-mcp-toolguard).     | `false`                           |
 | `--force`                |       | Overwrite existing files in the output directory without confirmation                                                                          | `false`                           |
 
 > **Configuring the API base URL at runtime:** the generated server reads
@@ -403,6 +404,62 @@ scheme declares a client credentials flow.
   body. Leave it off if your spec does not describe real responses accurately.
 - **Server instructions:** the spec's `info.description` (trimmed, up to 2000 characters) is sent to
   clients as the server instructions.
+
+---
+
+## 🛡 Guard the server with mcp-toolguard
+
+An MCP server built from an API spec hands the model real write access to that API. With
+`--toolguard`, the generated project also runs behind [mcp-toolguard](https://github.com/harsha-iiiv/mcp-toolguard),
+a local proxy between the MCP client and the server that blocks poisoned tool descriptions, tools that
+change after you approved them, secrets in tool arguments and prompt injection in API responses.
+
+```bash
+openapi-mcp-generator --input ./petstore.json --output ./petstore-mcp --toolguard
+cd petstore-mcp && npm install
+npm run start:guarded
+```
+
+The generator writes a `toolguard.yaml` built from the tools it generated:
+
+- **Allow-list:** only the generated tools. A tool the server was not built with is hidden, and calls
+  to it are blocked.
+- **Human approval for writes:** every tool that is not read-only (POST, PUT, PATCH and DELETE by
+  default, or as set by `x-mcp-annotations`) returns `APPROVAL REQUIRED … approve <id>`. Run
+  `npx mcp-toolguard-cli@0.2 approve <id>` and the identical call then goes through once.
+  Read-only tools run without asking.
+- **Destructive tools** are listed in a commented `deny:` line: uncomment it to forbid them instead.
+
+Point your MCP client at the guarded command (the exact line is printed at the end of generation and
+in the header of `toolguard.yaml`):
+
+```json
+{
+  "mcpServers": {
+    "petstore": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-toolguard-cli@0.2",
+        "run",
+        "--policy",
+        "/abs/path/petstore-mcp/toolguard.yaml",
+        "--server-id",
+        "petstore",
+        "--",
+        "node",
+        "/abs/path/petstore-mcp/build/index.js"
+      ]
+    }
+  }
+}
+```
+
+For `web` and `streamable-http` servers, start the server first (`npm run start:web` /
+`npm run start:http`); toolguard connects to its local URL (`--transport sse|http --url ...`). The
+`cloudflare-worker` target is not supported. The flag adds no dependency to the generator or to
+the generated project: toolguard runs through `npx`. Set `mode: monitor` in `toolguard.yaml` to log
+and warn without blocking while you try it.
 
 ---
 

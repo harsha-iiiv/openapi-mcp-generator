@@ -1,0 +1,215 @@
+/**
+ * --toolguard: emits a mcp-toolguard policy tailored to the generated tools, plus a start:guarded
+ * script. Default output must not change when the flag is off.
+ *
+ * Run with: npm test
+ */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execFileSync, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  TOOLGUARD_PACKAGE,
+  classifyTools,
+  generateToolguardPolicy,
+  supportsToolguard,
+  toolguardRunArgs,
+  toolguardStartScript,
+} from '../src/generator/toolguard.js';
+import type { McpToolDefinition } from '../src/types/index.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, '..');
+const fixture = path.join(here, 'fixtures', 'sample-api.json');
+const cliEntry = path.join(repoRoot, 'bin', 'openapi-mcp-generator.js');
+
+function tool(name: string, method: string, annotations?: McpToolDefinition['annotations']) {
+  return { name, method, annotations } as McpToolDefinition;
+}
+
+const TOOLS = [
+  tool('listPets', 'get', { readOnlyHint: true }),
+  tool('createPet', 'post', { readOnlyHint: false, destructiveHint: false }),
+  tool('updatePet', 'put', { readOnlyHint: false, destructiveHint: true }),
+  tool('deletePet', 'delete', { readOnlyHint: false, destructiveHint: true }),
+  tool('softDeletePet', 'delete', { readOnlyHint: false, destructiveHint: false }), // x-mcp-annotations override
+  tool('noHints', 'post'),
+];
+
+/** Pull a YAML block sequence of quoted names out of the policy (keeps the test free of a YAML dep). */
+function listAfter(policy: string, key: string): string[] {
+  const m = new RegExp(`\\n  ${key}:((?:\\n    - "[^"]*")*| \\[\\])`).exec(policy);
+  if (!m) throw new Error(`no ${key} list in policy`);
+  return [...m[1].matchAll(/- "([^"]*)"/g)].map((x) => x[1]);
+}
+
+describe('toolguard policy generation', () => {
+  it('classifies tools from their annotations; missing hints count as writes', () => {
+    expect(classifyTools(TOOLS)).toEqual({
+      readOnly: ['listPets'],
+      writes: ['createPet', 'updatePet', 'deletePet', 'softDeletePet', 'noHints'],
+      destructive: ['updatePet', 'deletePet', 'noHints'],
+    });
+  });
+
+  it('allows exactly the generated tools and requires approval for writes', () => {
+    const policy = generateToolguardPolicy(TOOLS, 'petstore', 'stdio', 3000);
+    expect(listAfter(policy, 'allow')).toEqual(TOOLS.map((t) => t.name));
+    expect(listAfter(policy, 'tools')).toEqual([
+      'createPet',
+      'updatePet',
+      'deletePet',
+      'softDeletePet',
+      'noHints',
+    ]);
+    expect(policy).toContain('\n  unlisted: block\n');
+    expect(policy).toContain('\n  unknown: block\n');
+    expect(policy).toContain('\nmode: enforce');
+    expect(policy).toContain('\nversion: 1\n');
+    // Destructive tools are offered as a one-line deny, commented out.
+    expect(policy).toContain('# deny: ["updatePet","deletePet","noHints"]');
+    // No trailing whitespace.
+    expect(policy.split('\n').some((l) => / $/.test(l))).toBe(false);
+  });
+
+  it('writes empty lists for an API with no writes', () => {
+    const policy = generateToolguardPolicy([TOOLS[0]], 'ro', 'stdio', 3000);
+    expect(listAfter(policy, 'tools')).toEqual([]);
+    expect(policy).toContain('  tools: []');
+  });
+
+  it('quotes tool names so YAML never misreads them', () => {
+    const policy = generateToolguardPolicy(
+      [tool('yes', 'get', { readOnlyHint: true })],
+      'x',
+      'stdio',
+      3000
+    );
+    expect(policy).toContain('    - "yes"');
+  });
+
+  it('wraps stdio servers by command and HTTP servers by URL', () => {
+    expect(toolguardRunArgs('petstore', 'stdio', 3000)).toEqual([
+      '-y',
+      TOOLGUARD_PACKAGE,
+      'run',
+      '--policy',
+      'toolguard.yaml',
+      '--server-id',
+      'petstore',
+      '--',
+      'node',
+      'build/index.js',
+    ]);
+    expect(toolguardRunArgs('petstore', 'streamable-http', 4100).slice(-4)).toEqual([
+      '--transport',
+      'http',
+      '--url',
+      'http://localhost:4100/mcp',
+    ]);
+    expect(toolguardRunArgs('petstore', 'web', 3000).slice(-4)).toEqual([
+      '--transport',
+      'sse',
+      '--url',
+      'http://localhost:3000/sse',
+    ]);
+    expect(toolguardStartScript('petstore', 'stdio', 3000)).toMatch(/^npm run build && npx -y /);
+    expect(toolguardStartScript('petstore', 'streamable-http', 3000)).toMatch(/^npx -y /);
+  });
+
+  it('does not support the Cloudflare Worker target', () => {
+    expect(supportsToolguard(undefined)).toBe(true);
+    expect(supportsToolguard('stdio')).toBe(true);
+    expect(supportsToolguard('web')).toBe(true);
+    expect(supportsToolguard('streamable-http')).toBe(true);
+    expect(supportsToolguard('cloudflare-worker')).toBe(false);
+  });
+});
+
+describe('--toolguard CLI', () => {
+  let workdir: string;
+
+  beforeAll(() => {
+    // dist/ is built once by tests/global-setup.ts.
+    workdir = fs.mkdtempSync(path.join(repoRoot, '.test-tmp-'));
+  });
+
+  afterAll(() => {
+    if (workdir && fs.existsSync(workdir)) fs.rmSync(workdir, { recursive: true, force: true });
+  });
+
+  function generate(outDir: string, extraArgs: string[]): string {
+    return execFileSync(
+      'node',
+      [cliEntry, '--input', fixture, '--output', outDir, '--force', ...extraArgs],
+      { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' }
+    );
+  }
+
+  it('default output is unchanged: no policy, no start:guarded', () => {
+    const out = path.join(workdir, 'plain');
+    generate(out, []);
+    expect(fs.existsSync(path.join(out, 'toolguard.yaml'))).toBe(false);
+    const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
+    expect(pkg.scripts['start:guarded']).toBeUndefined();
+  });
+
+  it('stdio: writes toolguard.yaml for the spec tools and a start:guarded script', () => {
+    const out = path.join(workdir, 'stdio');
+    generate(out, ['--toolguard']);
+    const policy = fs.readFileSync(path.join(out, 'toolguard.yaml'), 'utf8');
+    // sample-api.json: GET /items, GET /items/{id}, POST /items.
+    expect(listAfter(policy, 'allow').sort()).toEqual(['createItem', 'getItemById', 'listItems']);
+    expect(listAfter(policy, 'tools')).toEqual(['createItem']);
+    const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
+    expect(pkg.scripts['start:guarded']).toBe(
+      `npm run build && npx -y ${TOOLGUARD_PACKAGE} run --policy toolguard.yaml --server-id sample-api -- node build/index.js`
+    );
+    // The generator adds no dependency for this.
+    expect(JSON.stringify(pkg.dependencies)).not.toContain('toolguard');
+  });
+
+  it('respects tool filters: excluded operations are not allowed', () => {
+    const out = path.join(workdir, 'filtered');
+    generate(out, ['--toolguard', '--exclude-operations', 'createItem']);
+    const policy = fs.readFileSync(path.join(out, 'toolguard.yaml'), 'utf8');
+    expect(listAfter(policy, 'allow').sort()).toEqual(['getItemById', 'listItems']);
+    expect(listAfter(policy, 'tools')).toEqual([]);
+  });
+
+  it('streamable-http: guards the local URL on the configured port', () => {
+    const out = path.join(workdir, 'http');
+    generate(out, ['--toolguard', '--transport', 'streamable-http', '--port', '4123']);
+    const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
+    expect(pkg.scripts['start:guarded']).toContain(
+      '--transport http --url http://localhost:4123/mcp'
+    );
+    expect(fs.readFileSync(path.join(out, 'toolguard.yaml'), 'utf8')).toContain(
+      'npm run start:http'
+    );
+  });
+
+  it('cloudflare-worker: warns and writes no policy', () => {
+    const out = path.join(workdir, 'worker');
+    const realSpec = path.join(here, 'fixtures', 'real-petstore.json');
+    const res = spawnSync(
+      'node',
+      [
+        cliEntry,
+        '--input',
+        realSpec,
+        '--output',
+        out,
+        '--force',
+        '--transport',
+        'cloudflare-worker',
+        '--toolguard',
+      ],
+      { cwd: repoRoot, encoding: 'utf8' }
+    );
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain('--toolguard is not supported with --transport cloudflare-worker');
+    expect(fs.existsSync(path.join(out, 'toolguard.yaml'))).toBe(false);
+  });
+});

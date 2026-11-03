@@ -33,6 +33,13 @@ import { getServerInstructions, normalizeBoolean } from './utils/helpers.js';
 import { parseSpecSecurely } from './utils/parser-security.js';
 import { extractToolsFromApi, filterTools } from './parser/extract-tools.js';
 import { determineBaseUrl } from './utils/url.js';
+import {
+  TOOLGUARD_POLICY_FILE,
+  generateToolguardPolicy,
+  supportsToolguard,
+  toolguardRunArgs,
+  toolguardStartScript,
+} from './generator/toolguard.js';
 import pkg from '../package.json' with { type: 'json' };
 
 // Export programmatic API
@@ -175,6 +182,10 @@ program
   .option(
     '--output-schema',
     "Declare each tool's outputSchema from its first 2xx application/json response schema (object schemas only) and return a tool error when a response does not match it. Default: false."
+  )
+  .option(
+    '--toolguard',
+    'Also emit toolguard.yaml and a start:guarded script that runs the server behind mcp-toolguard (https://github.com/harsha-iiiv/mcp-toolguard): only the generated tools are allowed and calls that can change data need human approval. Not for cloudflare-worker. Default: false.'
   )
   .option('--force', 'Overwrite existing files without prompting')
   .version(pkg.version) // Match package.json version
@@ -343,6 +354,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         ['--insecure', Boolean(options.insecure)],
         ['--generate-lib', Boolean(options.generateLib)],
         ['--oauth-creds-in-body', Boolean(options.oauthCredsInBody)],
+        ['--toolguard', Boolean(options.toolguard)],
       ] as const) {
         if (present) {
           console.error(
@@ -421,11 +433,27 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     console.error('Generating server code...');
     const serverTsContent = generateMcpServerCode(api, options, serverName, serverVersion);
 
+    // Optional mcp-toolguard policy: built from the same tool list the server is generated with.
+    const port = options.port ?? 3000;
+    const withToolguard = Boolean(options.toolguard) && supportsToolguard(options.transport);
+    let toolguardPolicy: string | undefined;
+    if (withToolguard) {
+      console.error('Generating mcp-toolguard policy...');
+      const tools = filterTools(
+        extractToolsFromApi(api, options.defaultInclude ?? true, options.maxToolNameLength ?? 64),
+        options
+      );
+      toolguardPolicy = generateToolguardPolicy(tools, serverName, options.transport, port);
+    }
+
     console.error('Generating package.json...');
     const packageJsonContent = generatePackageJson(
       serverName,
       serverVersion,
-      options.transport as TransportType
+      options.transport as TransportType,
+      withToolguard
+        ? { 'start:guarded': toolguardStartScript(serverName, options.transport, port) }
+        : undefined
     );
 
     console.error('Generating tsconfig.json...');
@@ -481,6 +509,12 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
 
     await fs.writeFile(envExamplePath, envExampleContent);
     console.error(` -> Created ${envExamplePath}`);
+
+    if (toolguardPolicy !== undefined) {
+      const policyPath = path.join(outputDir, TOOLGUARD_POLICY_FILE);
+      await fs.writeFile(policyPath, toolguardPolicy);
+      console.error(` -> Created ${policyPath}`);
+    }
 
     // Only write OAuth2 docs if there are OAuth2 security schemes
     if (oauth2DocsContent.includes('No OAuth2 security schemes defined')) {
@@ -555,6 +589,19 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     if (inboundAuth === 'bearer' && HTTP_TRANSPORTS.includes(transport)) {
       console.error(
         `Inbound auth is on: set MCP_AUTH_TOKEN in .env; clients send Authorization: Bearer <token>.`
+      );
+    }
+    if (withToolguard) {
+      console.error('\nmcp-toolguard (security proxy):');
+      console.error(
+        `- Policy: ${TOOLGUARD_POLICY_FILE} (allow-list of the generated tools; writes need approval)`
+      );
+      console.error(`- Try it: npm run start:guarded`);
+      console.error(
+        `- MCP client config: "command": "npx", "args": ${JSON.stringify(toolguardRunArgs(serverName, options.transport, port))}`
+      );
+      console.error(
+        `  (run from ${outputDir}, or use absolute paths for the policy and build/index.js)`
       );
     }
     console.error('---');
