@@ -64,6 +64,8 @@ function isHttpTransport(transport: TransportType | string | undefined): boolean
 
 /** Environment variable the generated HTTP server checks with `--inbound-auth bearer`. */
 export const INBOUND_TOKEN_ENV = 'MCP_AUTH_TOKEN';
+/** Comma-separated tokens for rotation; the server prefers it over MCP_AUTH_TOKEN when set. */
+export const INBOUND_TOKENS_ENV = 'MCP_AUTH_TOKENS';
 
 /** Options for the guarded command. */
 export interface ToolguardRunOptions {
@@ -129,12 +131,13 @@ export function generateToolguardPolicy(
 ${
   opts.bearer
     ? `# The server requires a bearer token: replace <${INBOUND_TOKEN_ENV}> with the value from .env (it is a
-# secret, so keep that client config private). npm run start:guarded reads it from the
-# ${INBOUND_TOKEN_ENV} environment variable instead (export it first).
+# secret, so keep that client config private). npm run start:guarded reads it from the environment
+# instead, like the server: the first entry of ${INBOUND_TOKENS_ENV}, else ${INBOUND_TOKEN_ENV} (export it first).
 `
     : ''
 }`
     : `#
+# Run npm run build first: the client config above starts build/index.js, which npm install does not create.
 # The server loads .env from its working directory. Either start the entry from ${projectDir}
 # (if your client supports a working directory) or pass the variables from .env in the entry's
 # "env" object: absolute paths alone do not load .env.
@@ -181,10 +184,14 @@ function shellArg(arg: string): string {
   return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `"${arg.replace(/(["\\`])/g, '\\$1')}"`;
 }
 
+/** Shell variable the start script resolves the bearer token into. */
+const SCRIPT_TOKEN_VAR = 'TOOLGUARD_TOKEN';
+
 /**
  * package.json script that runs the server behind mcp-toolguard. With bearer auth the token is read
- * from the MCP_AUTH_TOKEN environment variable at run time (never written into package.json); the
- * script stops with a clear message when it is not set.
+ * from the environment at run time, never written into package.json. Like the generated server, it
+ * uses the first MCP_AUTH_TOKENS entry when that is set (rotation), else MCP_AUTH_TOKEN, and stops
+ * with a clear message when neither is set. The script needs a POSIX shell (macOS, Linux, WSL).
  */
 export function toolguardStartScript(
   serverName: string,
@@ -192,10 +199,20 @@ export function toolguardStartScript(
   port: number,
   opts: Pick<ToolguardRunOptions, 'bearer'> = {}
 ): string {
-  const tokenText = `\${${INBOUND_TOKEN_ENV}:?export ${INBOUND_TOKEN_ENV} (see .env) first}`;
+  const v = SCRIPT_TOKEN_VAR;
+  const tokenText = `\${${v}:?export ${INBOUND_TOKEN_ENV} or ${INBOUND_TOKENS_ENV} (see .env) first}`;
   const args = toolguardRunArgs(serverName, transport, port, { ...opts, tokenText });
   const cmd = ['npx', ...args]
     .map((a) => (a.includes(tokenText) ? `"${a}"` : shellArg(a)))
     .join(' ');
-  return isHttpTransport(transport) ? cmd : `npm run build && ${cmd}`;
+  if (!isHttpTransport(transport)) return `npm run build && ${cmd}`;
+  if (!opts.bearer) return cmd;
+  // First comma-separated MCP_AUTH_TOKENS entry (spaces trimmed, as the server does), else MCP_AUTH_TOKEN.
+  const pick = [
+    `${v}="\${${INBOUND_TOKENS_ENV}%%,*}"`,
+    `${v}="\${${v}#"\${${v}%%[! ]*}"}"`,
+    `${v}="\${${v}%"\${${v}##*[! ]}"}"`,
+    `${v}="\${${v}:-\$${INBOUND_TOKEN_ENV}}"`,
+  ].join('; ');
+  return `${pick}; ${cmd}`;
 }

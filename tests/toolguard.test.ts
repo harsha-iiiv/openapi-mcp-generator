@@ -127,9 +127,10 @@ describe('toolguard policy generation', () => {
 
     const script = toolguardStartScript('petstore', 'streamable-http', 3000, { bearer: true });
     expect(script).toContain(
-      '--header "Authorization: Bearer ${MCP_AUTH_TOKEN:?export MCP_AUTH_TOKEN (see .env) first}"'
+      '--header "Authorization: Bearer ${TOOLGUARD_TOKEN:?export MCP_AUTH_TOKEN or MCP_AUTH_TOKENS (see .env) first}"'
     );
     expect(toolguardStartScript('petstore', 'web', 3000)).not.toContain('--header');
+    expect(toolguardStartScript('petstore', 'web', 3000)).not.toContain('TOOLGUARD_TOKEN');
 
     const policy = generateToolguardPolicy([], 'petstore', 'streamable-http', 3000, {
       bearer: true,
@@ -137,8 +138,34 @@ describe('toolguard policy generation', () => {
     expect(policy).toContain('"--header","Authorization: Bearer <MCP_AUTH_TOKEN>"');
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'bearer auth: start:guarded picks the token like the server (MCP_AUTH_TOKENS first entry, else MCP_AUTH_TOKEN)',
+    () => {
+      const script = toolguardStartScript('petstore', 'streamable-http', 3000, { bearer: true });
+      // Run everything before `npx` in a real POSIX shell and print the resolved token.
+      const pick = script.slice(0, script.indexOf('; npx '));
+      const resolve = (env: Record<string, string>) =>
+        spawnSync(
+          'sh',
+          [
+            '-c',
+            `${pick}; printf %s "\${TOOLGUARD_TOKEN:?export MCP_AUTH_TOKEN or MCP_AUTH_TOKENS (see .env) first}"`,
+          ],
+          { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } }
+        );
+      expect(resolve({ MCP_AUTH_TOKENS: 'new,old' }).stdout).toBe('new');
+      expect(resolve({ MCP_AUTH_TOKENS: ' new , old' }).stdout).toBe('new');
+      expect(resolve({ MCP_AUTH_TOKEN: 'single' }).stdout).toBe('single');
+      expect(resolve({ MCP_AUTH_TOKENS: 'rot', MCP_AUTH_TOKEN: 'ignored' }).stdout).toBe('rot');
+      const none = resolve({});
+      expect(none.status).not.toBe(0);
+      expect(none.stderr).toContain('export MCP_AUTH_TOKEN or MCP_AUTH_TOKENS (see .env) first');
+    }
+  );
+
   it('documents transport-specific limits in the policy header', () => {
     const stdio = generateToolguardPolicy([], 'petstore', 'stdio', 3000);
+    expect(stdio).toContain('Run npm run build first');
     expect(stdio).toContain('loads .env from its working directory');
     expect(stdio).toContain('"env" object');
     const http = generateToolguardPolicy([], 'petstore', 'streamable-http', 3000);
@@ -220,11 +247,32 @@ describe('--toolguard CLI', () => {
     );
   });
 
-  it('streamable-http with --inbound-auth bearer: start:guarded reads MCP_AUTH_TOKEN at run time', () => {
+  it('streamable-http with --inbound-auth bearer: start:guarded reads the token at run time', () => {
     const out = path.join(workdir, 'http-bearer');
     generate(out, ['--toolguard', '--transport', 'streamable-http', '--inbound-auth', 'bearer']);
     const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
-    expect(pkg.scripts['start:guarded']).toContain('Authorization: Bearer ${MCP_AUTH_TOKEN:?');
+    expect(pkg.scripts['start:guarded']).toContain('${MCP_AUTH_TOKENS%%,*}');
+    expect(pkg.scripts['start:guarded']).toContain('Authorization: Bearer ${TOOLGUARD_TOKEN:?');
+  });
+
+  it('--force without --toolguard keeps an existing toolguard.yaml but warns it may be stale', () => {
+    const out = path.join(workdir, 'stale');
+    generate(out, ['--toolguard']);
+    const before = fs.readFileSync(path.join(out, 'toolguard.yaml'), 'utf8');
+    const res = spawnSync('node', [cliEntry, '--input', fixture, '--output', out, '--force'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain('is from an earlier --toolguard run and was not regenerated');
+    expect(fs.readFileSync(path.join(out, 'toolguard.yaml'), 'utf8')).toBe(before);
+    // A fresh run with --toolguard does not warn.
+    const again = spawnSync(
+      'node',
+      [cliEntry, '--input', fixture, '--output', out, '--force', '--toolguard'],
+      { cwd: repoRoot, encoding: 'utf8' }
+    );
+    expect(again.stderr).not.toContain('earlier --toolguard run');
   });
 
   it('--generate-lib: warns and writes no policy or start:guarded', () => {

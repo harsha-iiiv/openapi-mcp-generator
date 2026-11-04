@@ -34,6 +34,7 @@ import { parseSpecSecurely } from './utils/parser-security.js';
 import { extractToolsFromApi, filterTools } from './parser/extract-tools.js';
 import { determineBaseUrl } from './utils/url.js';
 import {
+  INBOUND_TOKENS_ENV,
   INBOUND_TOKEN_ENV,
   TOOLGUARD_POLICY_FILE,
   generateToolguardPolicy,
@@ -448,6 +449,21 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       bearer: inboundAuth === 'bearer' && HTTP_TRANSPORTS.includes(transport),
     };
     let toolguardPolicy: string | undefined;
+    if (!withToolguard) {
+      // A policy from an earlier --toolguard run would keep enforcing its old allow-list (and hide
+      // tools added since). Leave the user's file alone, but say so.
+      const stalePolicy = path.join(outputDir, TOOLGUARD_POLICY_FILE);
+      const staleExists = await fs
+        .stat(stalePolicy)
+        .then(() => true)
+        .catch(() => false);
+      if (staleExists) {
+        console.error(
+          `Warning: ${stalePolicy} is from an earlier --toolguard run and was not regenerated. ` +
+            'Its allow-list may not match the new tools: delete it, or regenerate with --toolguard.'
+        );
+      }
+    }
     if (withToolguard) {
       console.error('Generating mcp-toolguard policy...');
       const tools = filterTools(
@@ -622,7 +638,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       );
       console.error(
         toolguardOpts.bearer
-          ? `- Try it: export ${INBOUND_TOKEN_ENV}=<token from .env>, then npm run start:guarded`
+          ? `- Try it: export ${INBOUND_TOKEN_ENV} (or ${INBOUND_TOKENS_ENV}) with the token from .env, then npm run start:guarded`
           : `- Try it: npm run start:guarded`
       );
       console.error(
@@ -634,7 +650,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         );
       } else {
         console.error(
-          `  (use absolute paths, and either start it from ${outputDir} or pass the .env values in the entry's "env": the server loads .env from its working directory)`
+          `  (run npm run build first; use absolute paths, and either start it from ${outputDir} or pass the .env values in the entry's "env": the server loads .env from its working directory)`
         );
       }
     }

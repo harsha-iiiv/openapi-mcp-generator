@@ -456,21 +456,25 @@ in the header of `toolguard.yaml`):
 }
 ```
 
-The generated server loads `.env` from its working directory, and absolute paths alone do not change
-that. So either start the entry from the project directory (if your client supports a working
-directory) or pass the values from `.env` in the entry's `env` object, as above.
+Run `npm run build` once before your client starts this entry: it runs `build/index.js`, which
+`npm install` does not create (`npm run start:guarded` builds for you). The generated server loads
+`.env` from its working directory, and absolute paths alone do not change that. So either start the
+entry from the project directory (if your client supports a working directory) or pass the values
+from `.env` in the entry's `env` object, as above.
 
 For `web` and `streamable-http` servers, build and start the server first (`npm run build`, then
 `npm run start:web` / `npm run start:http`); toolguard connects to its local URL
 (`--transport sse|http --url ...`). With `--inbound-auth bearer` the guarded command sends
-`Authorization: Bearer <token>`: `npm run start:guarded` reads it from the `MCP_AUTH_TOKEN`
-environment variable (export it first), and the client config shows a `<MCP_AUTH_TOKEN>` placeholder
-to replace. The token is never written into generated files. For these transports the policy applies
+`Authorization: Bearer <token>`: `npm run start:guarded` reads it from the environment the same way
+the server does (the first `MCP_AUTH_TOKENS` entry when you rotate, else `MCP_AUTH_TOKEN`; export it
+first, and use a POSIX shell such as macOS/Linux/WSL), and the client config shows a
+`<MCP_AUTH_TOKEN>` placeholder to replace. The token is never written into generated files. For these transports the policy applies
 only to calls that go through toolguard: a client that connects to the server's own port directly
 skips it, so combine `--toolguard` with `--inbound-auth bearer`.
 
 `--toolguard` is ignored with a warning for the `cloudflare-worker` target and with `--generate-lib`
-(a library build does not start a server). The flag adds no dependency to the generator or to
+(a library build does not start a server). Regenerating with `--force` but without `--toolguard`
+leaves an existing `toolguard.yaml` in place and warns that its allow-list may be outdated. The flag adds no dependency to the generator or to
 the generated project: toolguard runs through `npx`. Set `mode: monitor` in `toolguard.yaml` to log
 and warn without blocking while you try it.
 
