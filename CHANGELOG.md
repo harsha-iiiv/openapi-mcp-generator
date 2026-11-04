@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--toolguard`** (opt-in). The generated project also gets a `toolguard.yaml` and a
+  `start:guarded` script that run the server behind [mcp-toolguard](https://github.com/harsha-iiiv/mcp-toolguard),
+  a local MCP security proxy. The policy is built from the generated tools: only those tools are
+  allowed, calls that can change data (every tool that is not read-only) need human approval, and
+  destructive tools are listed for an optional deny. Works for `stdio`, `web` and `streamable-http`;
+  ignored with a warning for `cloudflare-worker`. Adds no dependency; default output is unchanged.
+
 - **Universal playground.** The hosted playground at https://mcp.pidata.tech/playground/ connects
   to any remote MCP server from the browser with nothing to install: custom headers, a bearer
   token, or OAuth sign-in (client ID metadata document, then dynamic client registration, then a

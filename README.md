@@ -105,6 +105,7 @@ The [`examples/`](./examples) folder holds the Swagger Petstore generated with 5
 | `--include-operations`   |       | Comma-separated operationIds or tool names to generate. Combined with `--include-tags` as a union.                                             | _(all)_                           |
 | `--exclude-operations`   |       | Comma-separated operationIds or tool names to skip. Exclusions win over inclusions.                                                            | _(none)_                          |
 | `--output-schema`        |       | Declare each tool's `outputSchema` from its 2xx JSON response schema (objects only) and reject responses that do not match it.                 | `false`                           |
+| `--toolguard`            |       | Also emit `toolguard.yaml` and a `start:guarded` script that run the server behind [mcp-toolguard](#-guard-the-server-with-mcp-toolguard).     | `false`                           |
 | `--force`                |       | Overwrite existing files in the output directory without confirmation                                                                          | `false`                           |
 
 > **Configuring the API base URL at runtime:** the generated server reads
@@ -403,6 +404,79 @@ scheme declares a client credentials flow.
   body. Leave it off if your spec does not describe real responses accurately.
 - **Server instructions:** the spec's `info.description` (trimmed, up to 2000 characters) is sent to
   clients as the server instructions.
+
+---
+
+## 🛡 Guard the server with mcp-toolguard
+
+An MCP server built from an API spec hands the model real write access to that API. With
+`--toolguard`, the generated project also runs behind [mcp-toolguard](https://github.com/harsha-iiiv/mcp-toolguard),
+a local proxy between the MCP client and the server that blocks poisoned tool descriptions, tools that
+change after you approved them, secrets in tool arguments and prompt injection in API responses.
+
+```bash
+openapi-mcp-generator --input ./petstore.json --output ./petstore-mcp --toolguard
+cd petstore-mcp && npm install
+npm run start:guarded
+```
+
+The generator writes a `toolguard.yaml` built from the tools it generated:
+
+- **Allow-list:** only the generated tools. A tool the server was not built with is hidden, and calls
+  to it are blocked.
+- **Human approval for writes:** every tool that is not read-only (POST, PUT, PATCH and DELETE by
+  default, or as set by `x-mcp-annotations`) returns `APPROVAL REQUIRED … approve <id>`. Run
+  `npx mcp-toolguard-cli@0.2 approve <id>` and the identical call then goes through once.
+  Read-only tools run without asking.
+- **Destructive tools** are listed in a commented `deny:` line: uncomment it to forbid them instead.
+
+Point your MCP client at the guarded command (the exact line is printed at the end of generation and
+in the header of `toolguard.yaml`):
+
+```json
+{
+  "mcpServers": {
+    "petstore": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-toolguard-cli@0.2",
+        "run",
+        "--policy",
+        "/abs/path/petstore-mcp/toolguard.yaml",
+        "--server-id",
+        "petstore",
+        "--",
+        "node",
+        "/abs/path/petstore-mcp/build/index.js"
+      ],
+      "env": { "API_KEY_PETSTORE": "..." }
+    }
+  }
+}
+```
+
+Run `npm run build` once before your client starts this entry: it runs `build/index.js`, which
+`npm install` does not create (`npm run start:guarded` builds for you). The generated server loads
+`.env` from its working directory, and absolute paths alone do not change that. So either start the
+entry from the project directory (if your client supports a working directory) or pass the values
+from `.env` in the entry's `env` object, as above.
+
+For `web` and `streamable-http` servers, build and start the server first (`npm run build`, then
+`npm run start:web` / `npm run start:http`); toolguard connects to its local URL
+(`--transport sse|http --url ...`). With `--inbound-auth bearer` the guarded command sends
+`Authorization: Bearer <token>`: `npm run start:guarded` reads it from the environment the same way
+the server does (the first `MCP_AUTH_TOKENS` entry when you rotate, else `MCP_AUTH_TOKEN`; export it
+first, and use a POSIX shell such as macOS/Linux/WSL), and the client config shows a
+`<MCP_AUTH_TOKEN>` placeholder to replace. The token is never written into generated files. For these transports the policy applies
+only to calls that go through toolguard: a client that connects to the server's own port directly
+skips it, so combine `--toolguard` with `--inbound-auth bearer`.
+
+`--toolguard` is ignored with a warning for the `cloudflare-worker` target and with `--generate-lib`
+(a library build does not start a server). Regenerating with `--force` but without `--toolguard`
+leaves an existing `toolguard.yaml` in place and warns that its allow-list may be outdated. The flag adds no dependency to the generator or to
+the generated project: toolguard runs through `npx`. Set `mode: monitor` in `toolguard.yaml` to log
+and warn without blocking while you try it.
 
 ---
 

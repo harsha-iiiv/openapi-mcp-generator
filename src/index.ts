@@ -33,6 +33,15 @@ import { getServerInstructions, normalizeBoolean } from './utils/helpers.js';
 import { parseSpecSecurely } from './utils/parser-security.js';
 import { extractToolsFromApi, filterTools } from './parser/extract-tools.js';
 import { determineBaseUrl } from './utils/url.js';
+import {
+  INBOUND_TOKENS_ENV,
+  INBOUND_TOKEN_ENV,
+  TOOLGUARD_POLICY_FILE,
+  generateToolguardPolicy,
+  supportsToolguard,
+  toolguardRunArgs,
+  toolguardStartScript,
+} from './generator/toolguard.js';
 import pkg from '../package.json' with { type: 'json' };
 
 // Export programmatic API
@@ -175,6 +184,10 @@ program
   .option(
     '--output-schema',
     "Declare each tool's outputSchema from its first 2xx application/json response schema (object schemas only) and return a tool error when a response does not match it. Default: false."
+  )
+  .option(
+    '--toolguard',
+    'Also emit toolguard.yaml and a start:guarded script that runs the server behind mcp-toolguard (https://github.com/harsha-iiiv/mcp-toolguard): only the generated tools are allowed and calls that can change data need human approval. Not for cloudflare-worker. Default: false.'
   )
   .option('--force', 'Overwrite existing files without prompting')
   .version(pkg.version) // Match package.json version
@@ -343,6 +356,7 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
         ['--insecure', Boolean(options.insecure)],
         ['--generate-lib', Boolean(options.generateLib)],
         ['--oauth-creds-in-body', Boolean(options.oauthCredsInBody)],
+        ['--toolguard', Boolean(options.toolguard)],
       ] as const) {
         if (present) {
           console.error(
@@ -421,11 +435,65 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
     console.error('Generating server code...');
     const serverTsContent = generateMcpServerCode(api, options, serverName, serverVersion);
 
+    // Optional mcp-toolguard policy: built from the same tool list the server is generated with.
+    const port = options.port ?? 3000;
+    if (options.toolguard && options.generateLib) {
+      // A library build only exports main(), so `node build/index.js` would exit without serving.
+      console.error(
+        'Warning: --toolguard is not supported with --generate-lib (the build does not start a server); ignoring.'
+      );
+    }
+    const withToolguard =
+      Boolean(options.toolguard) && supportsToolguard(options.transport) && !options.generateLib;
+    const toolguardOpts = {
+      bearer: inboundAuth === 'bearer' && HTTP_TRANSPORTS.includes(transport),
+    };
+    let toolguardPolicy: string | undefined;
+    if (!withToolguard) {
+      // A policy from an earlier --toolguard run would keep enforcing its old allow-list (and hide
+      // tools added since). Leave the user's file alone, but say so.
+      const stalePolicy = path.join(outputDir, TOOLGUARD_POLICY_FILE);
+      const staleExists = await fs
+        .stat(stalePolicy)
+        .then(() => true)
+        .catch(() => false);
+      if (staleExists) {
+        console.error(
+          `Warning: ${stalePolicy} is from an earlier --toolguard run and was not regenerated. ` +
+            'Its allow-list may not match the new tools: delete it, or regenerate with --toolguard.'
+        );
+      }
+    }
+    if (withToolguard) {
+      console.error('Generating mcp-toolguard policy...');
+      const tools = filterTools(
+        extractToolsFromApi(api, options.defaultInclude ?? true, options.maxToolNameLength ?? 64),
+        options
+      );
+      toolguardPolicy = generateToolguardPolicy(
+        tools,
+        serverName,
+        options.transport,
+        port,
+        toolguardOpts
+      );
+    }
+
     console.error('Generating package.json...');
     const packageJsonContent = generatePackageJson(
       serverName,
       serverVersion,
-      options.transport as TransportType
+      options.transport as TransportType,
+      withToolguard
+        ? {
+            'start:guarded': toolguardStartScript(
+              serverName,
+              options.transport,
+              port,
+              toolguardOpts
+            ),
+          }
+        : undefined
     );
 
     console.error('Generating tsconfig.json...');
@@ -481,6 +549,12 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
 
     await fs.writeFile(envExamplePath, envExampleContent);
     console.error(` -> Created ${envExamplePath}`);
+
+    if (toolguardPolicy !== undefined) {
+      const policyPath = path.join(outputDir, TOOLGUARD_POLICY_FILE);
+      await fs.writeFile(policyPath, toolguardPolicy);
+      console.error(` -> Created ${policyPath}`);
+    }
 
     // Only write OAuth2 docs if there are OAuth2 security schemes
     if (oauth2DocsContent.includes('No OAuth2 security schemes defined')) {
@@ -556,6 +630,37 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
       console.error(
         `Inbound auth is on: set MCP_AUTH_TOKEN in .env; clients send Authorization: Bearer <token>.`
       );
+    }
+    if (withToolguard) {
+      console.error('\nmcp-toolguard (security proxy):');
+      console.error(
+        `- Policy: ${TOOLGUARD_POLICY_FILE} (allow-list of the generated tools; writes need approval)`
+      );
+      console.error(
+        toolguardOpts.bearer
+          ? `- Try it: export ${INBOUND_TOKEN_ENV} (or ${INBOUND_TOKENS_ENV}) with the token from .env, then npm run start:guarded`
+          : `- Try it: npm run start:guarded`
+      );
+      // Absolute paths: MCP clients start commands from their own working directory.
+      const absoluteOut = path.resolve(outputDir);
+      const clientArgs = toolguardRunArgs(serverName, options.transport, port, toolguardOpts).map(
+        (arg) =>
+          arg === TOOLGUARD_POLICY_FILE
+            ? path.join(absoluteOut, TOOLGUARD_POLICY_FILE)
+            : arg === 'build/index.js'
+              ? path.join(absoluteOut, 'build', 'index.js')
+              : arg
+      );
+      console.error(`- MCP client config: "command": "npx", "args": ${JSON.stringify(clientArgs)}`);
+      if (HTTP_TRANSPORTS.includes(transport)) {
+        console.error(
+          `  (start the server first; only calls through toolguard are checked, not direct connections to port ${port})`
+        );
+      } else {
+        console.error(
+          `  (run npm run build first; either start it from ${absoluteOut} or pass the .env values in the entry's "env": the server loads .env from its working directory)`
+        );
+      }
     }
     console.error('---');
   } catch (error) {

@@ -4,12 +4,14 @@
  * @param serverName Server name
  * @param serverVersion Server version
  * @param transportType Type of transport to use (stdio, web, or streamable-http)
+ * @param extraScripts Additional npm scripts (e.g. start:guarded for --toolguard)
  * @returns JSON string for package.json
  */
 export function generatePackageJson(
   serverName: string,
   serverVersion: string,
-  transportType: string = 'stdio'
+  transportType: string = 'stdio',
+  extraScripts?: Record<string, string>
 ): string {
   const includeWebDeps = transportType === 'web' || transportType === 'streamable-http';
 
@@ -59,6 +61,8 @@ export function generatePackageJson(
       packageData.scripts['start:http'] = 'node build/index.js --transport=streamable-http';
     }
   }
+
+  if (extraScripts) Object.assign(packageData.scripts, extraScripts);
 
   return JSON.stringify(packageData, null, 2);
 }
