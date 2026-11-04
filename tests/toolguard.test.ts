@@ -56,7 +56,8 @@ describe('toolguard policy generation', () => {
   it('allows exactly the generated tools and requires approval for writes', () => {
     const policy = generateToolguardPolicy(TOOLS, 'petstore', 'stdio', 3000);
     expect(listAfter(policy, 'allow')).toEqual(TOOLS.map((t) => t.name));
-    expect(listAfter(policy, 'tools')).toEqual([
+    const approvalSection = policy.split('\napproval:')[1] ?? '';
+    expect(listAfter(approvalSection, 'tools')).toEqual([
       'createPet',
       'updatePet',
       'deletePet',
@@ -116,6 +117,35 @@ describe('toolguard policy generation', () => {
     ]);
     expect(toolguardStartScript('petstore', 'stdio', 3000)).toMatch(/^npm run build && npx -y /);
     expect(toolguardStartScript('petstore', 'streamable-http', 3000)).toMatch(/^npx -y /);
+  });
+
+  it('bearer auth: sends the token header without writing the token anywhere', () => {
+    const args = toolguardRunArgs('petstore', 'streamable-http', 3000, { bearer: true });
+    expect(args.slice(-2)).toEqual(['--header', 'Authorization: Bearer <MCP_AUTH_TOKEN>']);
+    // stdio has no inbound auth: no header even if asked.
+    expect(toolguardRunArgs('petstore', 'stdio', 3000, { bearer: true })).not.toContain('--header');
+
+    const script = toolguardStartScript('petstore', 'streamable-http', 3000, { bearer: true });
+    expect(script).toContain(
+      '--header "Authorization: Bearer ${MCP_AUTH_TOKEN:?export MCP_AUTH_TOKEN (see .env) first}"'
+    );
+    expect(toolguardStartScript('petstore', 'web', 3000)).not.toContain('--header');
+
+    const policy = generateToolguardPolicy([], 'petstore', 'streamable-http', 3000, {
+      bearer: true,
+    });
+    expect(policy).toContain('"--header","Authorization: Bearer <MCP_AUTH_TOKEN>"');
+  });
+
+  it('documents transport-specific limits in the policy header', () => {
+    const stdio = generateToolguardPolicy([], 'petstore', 'stdio', 3000);
+    expect(stdio).toContain('loads .env from its working directory');
+    expect(stdio).toContain('"env" object');
+    const http = generateToolguardPolicy([], 'petstore', 'streamable-http', 3000);
+    expect(http).toContain('npm run build && npm run start:http');
+    expect(http).toContain("connects to the server's\n# own port directly skips it");
+    expect(http).toContain('Use --inbound-auth bearer');
+    expect(http).not.toContain('loads .env');
   });
 
   it('does not support the Cloudflare Worker target', () => {
@@ -188,6 +218,27 @@ describe('--toolguard CLI', () => {
     expect(fs.readFileSync(path.join(out, 'toolguard.yaml'), 'utf8')).toContain(
       'npm run start:http'
     );
+  });
+
+  it('streamable-http with --inbound-auth bearer: start:guarded reads MCP_AUTH_TOKEN at run time', () => {
+    const out = path.join(workdir, 'http-bearer');
+    generate(out, ['--toolguard', '--transport', 'streamable-http', '--inbound-auth', 'bearer']);
+    const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
+    expect(pkg.scripts['start:guarded']).toContain('Authorization: Bearer ${MCP_AUTH_TOKEN:?');
+  });
+
+  it('--generate-lib: warns and writes no policy or start:guarded', () => {
+    const out = path.join(workdir, 'lib');
+    const res = spawnSync(
+      'node',
+      [cliEntry, '--input', fixture, '--output', out, '--force', '--generate-lib', '--toolguard'],
+      { cwd: repoRoot, encoding: 'utf8' }
+    );
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain('--toolguard is not supported with --generate-lib');
+    expect(fs.existsSync(path.join(out, 'toolguard.yaml'))).toBe(false);
+    const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
+    expect(pkg.scripts['start:guarded']).toBeUndefined();
   });
 
   it('cloudflare-worker: warns and writes no policy', () => {
