@@ -208,10 +208,15 @@ export function toolguardStartScript(
   if (!isHttpTransport(transport)) return `npm run build && ${cmd}`;
   if (!opts.bearer) return cmd;
   // First comma-separated MCP_AUTH_TOKENS entry (spaces trimmed, as the server does), else MCP_AUTH_TOKEN.
+  // Mirrors the server: split MCP_AUTH_TOKENS on commas, trim spaces, skip empty entries, take
+  // the first; fall back to MCP_AUTH_TOKEN. `set -f` keeps a token like `a*b` from globbing.
   const pick = [
-    `${v}="\${${INBOUND_TOKENS_ENV}%%,*}"`,
-    `${v}="\${${v}#"\${${v}%%[! ]*}"}"`,
-    `${v}="\${${v}%"\${${v}##*[! ]}"}"`,
+    `${v}=`,
+    'set -f',
+    'IFS=,',
+    `for t in \$${INBOUND_TOKENS_ENV}; do t="\${t#"\${t%%[! ]*}"}"; t="\${t%"\${t##*[! ]}"}"; if [ -n "$t" ]; then ${v}="$t"; break; fi; done`,
+    'unset IFS',
+    'set +f',
     `${v}="\${${v}:-\$${INBOUND_TOKEN_ENV}}"`,
   ].join('; ');
   return `${pick}; ${cmd}`;

@@ -131,6 +131,10 @@ describe('toolguard policy generation', () => {
     );
     expect(toolguardStartScript('petstore', 'web', 3000)).not.toContain('--header');
     expect(toolguardStartScript('petstore', 'web', 3000)).not.toContain('TOOLGUARD_TOKEN');
+    // web (SSE) sends the same header (the SDK applies it to the stream and to every POST).
+    expect(toolguardStartScript('petstore', 'web', 3000, { bearer: true })).toContain(
+      '--url http://localhost:3000/sse --header "Authorization: Bearer ${TOOLGUARD_TOKEN:?'
+    );
 
     const policy = generateToolguardPolicy([], 'petstore', 'streamable-http', 3000, {
       bearer: true,
@@ -155,6 +159,11 @@ describe('toolguard policy generation', () => {
         );
       expect(resolve({ MCP_AUTH_TOKENS: 'new,old' }).stdout).toBe('new');
       expect(resolve({ MCP_AUTH_TOKENS: ' new , old' }).stdout).toBe('new');
+      // Empty entries are skipped, like the server's split/trim/filter.
+      expect(resolve({ MCP_AUTH_TOKENS: ',new' }).stdout).toBe('new');
+      expect(resolve({ MCP_AUTH_TOKENS: ' , ,new' }).stdout).toBe('new');
+      // A token is never glob-expanded.
+      expect(resolve({ MCP_AUTH_TOKENS: '*' }).stdout).toBe('*');
       expect(resolve({ MCP_AUTH_TOKEN: 'single' }).stdout).toBe('single');
       expect(resolve({ MCP_AUTH_TOKENS: 'rot', MCP_AUTH_TOKEN: 'ignored' }).stdout).toBe('rot');
       const none = resolve({});
@@ -212,6 +221,21 @@ describe('--toolguard CLI', () => {
     expect(pkg.scripts['start:guarded']).toBeUndefined();
   });
 
+  it('prints the MCP client config with absolute paths', () => {
+    const out = path.join(workdir, 'printed');
+    const res = spawnSync(
+      'node',
+      [cliEntry, '--input', fixture, '--output', out, '--force', '--toolguard'],
+      { cwd: repoRoot, encoding: 'utf8' }
+    );
+    expect(res.status).toBe(0);
+    const line = res.stderr.split('\n').find((l) => l.includes('MCP client config')) ?? '';
+    const args = JSON.parse(line.slice(line.indexOf('[')));
+    expect(args).toContain(path.join(path.resolve(out), 'toolguard.yaml'));
+    expect(args).toContain(path.join(path.resolve(out), 'build', 'index.js'));
+    expect(args).not.toContain('toolguard.yaml');
+  });
+
   it('stdio: writes toolguard.yaml for the spec tools and a start:guarded script', () => {
     const out = path.join(workdir, 'stdio');
     generate(out, ['--toolguard']);
@@ -251,7 +275,7 @@ describe('--toolguard CLI', () => {
     const out = path.join(workdir, 'http-bearer');
     generate(out, ['--toolguard', '--transport', 'streamable-http', '--inbound-auth', 'bearer']);
     const pkg = JSON.parse(fs.readFileSync(path.join(out, 'package.json'), 'utf8'));
-    expect(pkg.scripts['start:guarded']).toContain('${MCP_AUTH_TOKENS%%,*}');
+    expect(pkg.scripts['start:guarded']).toContain('for t in $MCP_AUTH_TOKENS;');
     expect(pkg.scripts['start:guarded']).toContain('Authorization: Bearer ${TOOLGUARD_TOKEN:?');
   });
 
@@ -272,6 +296,7 @@ describe('--toolguard CLI', () => {
       [cliEntry, '--input', fixture, '--output', out, '--force', '--toolguard'],
       { cwd: repoRoot, encoding: 'utf8' }
     );
+    expect(again.status).toBe(0);
     expect(again.stderr).not.toContain('earlier --toolguard run');
   });
 

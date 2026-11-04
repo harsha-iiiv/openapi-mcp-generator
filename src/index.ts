@@ -641,16 +641,24 @@ async function runGenerator(options: CliOptions & { force?: boolean }) {
           ? `- Try it: export ${INBOUND_TOKEN_ENV} (or ${INBOUND_TOKENS_ENV}) with the token from .env, then npm run start:guarded`
           : `- Try it: npm run start:guarded`
       );
-      console.error(
-        `- MCP client config: "command": "npx", "args": ${JSON.stringify(toolguardRunArgs(serverName, options.transport, port, toolguardOpts))}`
+      // Absolute paths: MCP clients start commands from their own working directory.
+      const absoluteOut = path.resolve(outputDir);
+      const clientArgs = toolguardRunArgs(serverName, options.transport, port, toolguardOpts).map(
+        (arg) =>
+          arg === TOOLGUARD_POLICY_FILE
+            ? path.join(absoluteOut, TOOLGUARD_POLICY_FILE)
+            : arg === 'build/index.js'
+              ? path.join(absoluteOut, 'build', 'index.js')
+              : arg
       );
+      console.error(`- MCP client config: "command": "npx", "args": ${JSON.stringify(clientArgs)}`);
       if (HTTP_TRANSPORTS.includes(transport)) {
         console.error(
           `  (start the server first; only calls through toolguard are checked, not direct connections to port ${port})`
         );
       } else {
         console.error(
-          `  (run npm run build first; use absolute paths, and either start it from ${outputDir} or pass the .env values in the entry's "env": the server loads .env from its working directory)`
+          `  (run npm run build first; either start it from ${absoluteOut} or pass the .env values in the entry's "env": the server loads .env from its working directory)`
         );
       }
     }
