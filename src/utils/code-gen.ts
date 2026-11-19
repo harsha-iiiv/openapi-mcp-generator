@@ -81,9 +81,9 @@ export function generateToolDefinitionMap(
     description: \`${escapedDescription}\`,
     inputSchema: ${schemaString},
     method: "${tool.method}",
-    pathTemplate: "${tool.pathTemplate}",
+    pathTemplate: ${JSON.stringify(tool.pathTemplate)},
     executionParameters: ${execParamsString},
-    requestBodyContentType: ${tool.requestBodyContentType ? `"${tool.requestBodyContentType}"` : 'undefined'},${tool.serverUrl !== undefined ? `\n    serverUrl: ${JSON.stringify(tool.serverUrl)},` : ''}
+    requestBodyContentType: ${tool.requestBodyContentType ? JSON.stringify(tool.requestBodyContentType) : 'undefined'},${tool.serverUrl !== undefined ? `\n    serverUrl: ${JSON.stringify(tool.serverUrl)},` : ''}
     securityRequirements: ${securityReqsString},
     tags: ${tagsString},
     deprecated: ${tool.deprecated ? 'true' : 'false'},
